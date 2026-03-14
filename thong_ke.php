@@ -30,10 +30,7 @@ if ($result && $result->num_rows > 0) {
         $so_luong = (int)$row['tong_so'];
 
         if (!isset($region_data[$khu_vuc])) {
-            $region_data[$khu_vuc] = [
-                'total' => 0,
-                'details' => []
-            ];
+            $region_data[$khu_vuc] = ['total' => 0, 'details' => []];
         }
 
         $region_data[$khu_vuc]['total'] += $so_luong;
@@ -52,13 +49,13 @@ foreach ($region_data as $region_name => $data) {
     $region_totals[] = $total;
 
     if ($total >= 25) {
-        $region_colors[] = 'rgba(239, 68, 68, 0.82)';
+        $region_colors[] = '#ef4444'; // Đỏ (Red)
         $canh_bao_data[$region_name] = 'Báo động đỏ';
     } elseif ($total >= 10) {
-        $region_colors[] = 'rgba(245, 158, 11, 0.82)';
+        $region_colors[] = '#f59e0b'; // Cam (Amber)
         $canh_bao_data[$region_name] = 'Cảnh báo vàng';
     } else {
-        $region_colors[] = 'rgba(16, 185, 129, 0.82)';
+        $region_colors[] = '#10b981'; // Xanh lá (Emerald)
         $canh_bao_data[$region_name] = 'An toàn';
     }
 }
@@ -81,6 +78,10 @@ if (!empty($region_totals)) {
     <link rel="icon" type="image/svg+xml" href="assets/greentech-favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -109,8 +110,11 @@ if (!empty($region_totals)) {
             background-attachment: scroll;
             background-repeat: no-repeat;
         }
-
         .font-semibold { font-weight: 500 !important; }
+        
+        /* Chỉnh lại giao diện Popup Leaflet cho bản đồ Thống kê
+        .leaflet-popup-content-wrapper { background: #1e293b; color: white; border-radius: 12px; }
+        .leaflet-popup-tip { background: #1e293b; } */
     </style>
 </head>
 <body class="bg-brandBg/90 text-brandText antialiased min-h-screen">
@@ -135,8 +139,8 @@ if (!empty($region_totals)) {
     <main class="pt-24 pb-12 px-6">
         <section class="max-w-[1240px] mx-auto bg-white/90 backdrop-blur-md rounded-3xl border border-white/60 shadow-xl overflow-hidden">
             <div class="p-8 md:p-10 border-b border-slate-200/70 bg-gradient-to-r from-green-50 to-slate-50">
-                <h1 class="text-2xl md:text-3xl font-semibold tracking-tight text-brandText">Thống Kê Mật Độ Theo Từng Thôn</h1>
-                <p class="text-sm text-slate-600 mt-2">Đồng bộ dữ liệu từ bản đồ WebGIS mới nhất, không còn thống kê chung chung theo biểu đồ tròn.</p>
+                <h1 class="text-2xl md:text-3xl font-semibold tracking-tight text-brandText">Thống Kê Mật Độ & Bản Đồ Phân Bố</h1>
+                <p class="text-sm text-slate-600 mt-2">Dữ liệu được cập nhật theo thời gian thực từ hệ thống nhận diện AI.</p>
             </div>
 
             <div class="p-8 md:p-10 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -156,11 +160,28 @@ if (!empty($region_totals)) {
             </div>
 
             <div class="px-8 md:px-10 pb-10 grid grid-cols-1 xl:grid-cols-[58%_42%] gap-6">
-                <div class="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
-                    <h2 class="text-sm font-semibold text-slate-700 mb-4">Mật độ côn trùng theo khu vực</h2>
-                    <div class="w-full h-[340px]">
-                        <canvas id="regionChart"></canvas>
+                <div class="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm flex flex-col gap-6">
+                    
+                    <div>
+                        <h2 class="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
+                            <iconify-icon icon="solar:map-point-bold-duotone" class="text-brand text-lg"></iconify-icon> 
+                            Bản đồ Mật độ (Khu vực Hà Nội)
+                        </h2>
+                        <div id="webgis-map" class="w-full h-[350px] rounded-xl border border-slate-200 z-0"></div>
                     </div>
+
+                    <hr class="border-slate-100">
+
+                    <div>
+                        <h2 class="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
+                            <iconify-icon icon="solar:chart-square-bold-duotone" class="text-brand text-lg"></iconify-icon> 
+                            So sánh biểu đồ cột
+                        </h2>
+                        <div class="w-full h-[250px]">
+                            <canvas id="regionChart"></canvas>
+                        </div>
+                    </div>
+
                 </div>
 
                 <div class="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
@@ -232,11 +253,6 @@ if (!empty($region_totals)) {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { display: false },
-                    title: {
-                        display: true,
-                        text: 'So sánh mật độ giữa các thôn',
-                        font: { size: 16, weight: '600' }
-                    },
                     tooltip: {
                         callbacks: {
                             label: (context) => ' ' + context.parsed.y + ' cá thể'
@@ -253,6 +269,77 @@ if (!empty($region_totals)) {
                         ticks: { color: '#64748b', precision: 0 },
                         grid: { color: 'rgba(148,163,184,0.18)' }
                     }
+                }
+            }
+        });
+    </script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const regionCoordinates = {
+                'Thôn 1 (Vùng Lúa nước)': [20.760, 105.775],
+                'Thôn 2 (Vùng Cải xanh)': [20.710, 105.760],
+                'Thôn 3 (Vùng Cà chua)': [20.715, 105.810]
+            };
+
+            const unghoaBounds = L.latLngBounds(
+                L.latLng(20.650, 105.680),
+                L.latLng(20.820, 105.850)
+            );
+
+            const map = L.map('webgis-map', {
+                center: [20.734, 105.770],
+                zoom: 12,                    
+                minZoom: 12,
+                maxZoom: 18,
+                maxBounds: unghoaBounds,
+                maxBoundsViscosity: 1.0,
+                zoomControl: false
+            });
+
+            // Nền sáng OpenStreetMap
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+            
+            // Viền đậm
+            L.rectangle(unghoaBounds, {color: "#1d4ed8", weight: 4, fill: false, dashArray: '12, 12', opacity: 0.9}).addTo(map);
+
+            for (let i = 0; i < regionLabels.length; i++) {
+                let rName = regionLabels[i];
+                let rTotal = regionTotals[i];
+                let rColor = regionColors[i];
+
+                if (regionCoordinates[rName]) {
+                    let coords = regionCoordinates[rName];
+
+                    let circle = L.circleMarker(coords, {
+                        radius: rTotal > 0 ? Math.min(Math.max(rTotal * 1.5, 12), 35) : 8,
+                        fillColor: rColor,
+                        color: rColor,
+                        weight: 2,
+                        opacity: 0.8,
+                        fillOpacity: 0.6
+                    }).addTo(map);
+
+                    L.circleMarker(coords, {radius: 3, fillColor: '#ffffff', color: 'transparent', fillOpacity: 1}).addTo(map);
+
+                    let levelText = rTotal >= 25 ? 'BÁO ĐỘNG ĐỎ' : (rTotal >= 10 ? 'CẢNH BÁO' : 'AN TOÀN');
+
+                    // Popup chữ tối
+                    circle.bindPopup(`
+                        <div style="font-family: Inter, sans-serif; text-align: center; min-width: 130px;">
+                            <strong style="color: #1e293b; font-size: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; display: block; margin-bottom: 10px;">${rName}</strong>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #64748b; font-size: 12px;">Mức độ:</span>
+                                <span style="color: ${rColor}; font-size: 12px; font-weight: bold;">${levelText}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="color: #64748b; font-size: 12px;">Phát hiện:</span>
+                                <strong style="color: #0f172a; font-size: 18px;">${rTotal}</strong>
+                            </div>
+                        </div>
+                    `);
                 }
             }
         });

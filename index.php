@@ -59,7 +59,7 @@ $expert_system = [
         'chua' => 'Vệ sinh đồng ruộng, diệt cỏ dại. Rải thuốc hột lưu dẫn xuống ruộng.'
     ]
 ];
-// Gộp các loại côn trùng nhai cắn (cào cào, sâu bướm, dế trũi...) vào chung một chẩn đoán
+// Gộp các loại côn trùng nhai cắn
 $nhai_can = ['benh' => 'Lá bị cắn khuyết, đứt rễ. Dễ nhiễm nấm cơ hội qua vết thương hở.', 'chua' => 'Sử dụng bẫy đèn bắt bướm/côn trùng trưởng thành. Phun thuốc trừ sâu sinh học.'];
 $expert_system['grasshopper'] = $nhai_can;
 $expert_system['caterpillar'] = $nhai_can;
@@ -196,6 +196,19 @@ if ($result_gis && $result_gis->num_rows > 0) {
         $gis_data[$kv]['details'][$loai_sau] = $sl;
     }
 }
+
+// Chuẩn bị dữ liệu mảng màu sắc cảnh báo cho bản đồ
+$region_style = [];
+foreach ($gis_data as $kv_name => $data) {
+    $count = (int)$data['total'];
+    if ($count >= 25) {
+        $region_style[$kv_name] = ['fill' => '#ef4444', 'badge' => 'bg-red-500', 'text' => 'text-red-200', 'level' => 'BÁO ĐỘNG ĐỎ'];
+    } elseif ($count >= 10) {
+        $region_style[$kv_name] = ['fill' => '#f59e0b', 'badge' => 'bg-amber-500', 'text' => 'text-amber-200', 'level' => 'CẢNH BÁO VÀNG'];
+    } else {
+        $region_style[$kv_name] = ['fill' => '#10b981', 'badge' => 'bg-emerald-500', 'text' => 'text-emerald-200', 'level' => 'AN TOÀN'];
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -224,6 +237,10 @@ if ($result_gis && $result_gis->num_rows > 0) {
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -237,12 +254,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-
-        .map-pattern {
-            background-color: #0f172a;
-            background-image: radial-gradient(#334155 1px, transparent 1px);
-            background-size: 24px 24px;
-        }
 
         @keyframes laserScan {
             0% { top: 0; opacity: 0; }
@@ -264,16 +275,9 @@ if ($result_gis && $result_gis->num_rows > 0) {
             animation: ticker 25s linear infinite;
         }
 
-        @media (prefers-reduced-motion: reduce), (max-width: 768px) {
-            .animate-ticker,
-            .animate-laser,
-            .animate-pulse {
-                animation: none !important;
-            }
-        }
-
-        .font-semibold { font-weight: 500 !important; }
-        .font-bold { font-weight: 600 !important; }
+        /* Fix Leaflet popup style in dark mode
+        .leaflet-popup-content-wrapper { background: #1e293b; color: white; border-radius: 12px; }
+        .leaflet-popup-tip { background: #1e293b; } */
     </style>
 </head>
 <body class="bg-brandBg/90 text-brandText antialiased flex flex-col min-h-screen">
@@ -287,6 +291,7 @@ if ($result_gis && $result_gis->num_rows > 0) {
                 <a href="#home" class="text-sm text-slate-500 hover:text-brand transition-colors">Trang chủ</a>
                 <a href="#scanner" class="text-sm text-slate-500 hover:text-brand transition-colors">Quét AI</a>
                 <a href="#encyclopedia" class="text-sm text-slate-500 hover:text-brand transition-colors">Cẩm nang</a>
+                <a href="#webgis" class="text-sm text-slate-500 hover:text-brand transition-colors">Bản đồ</a>
                 <a href="thong_ke.php" class="text-sm text-slate-500 hover:text-brand transition-colors">Thống kê</a>
             </div>
             <div class="flex items-center gap-3">
@@ -478,158 +483,34 @@ if ($result_gis && $result_gis->num_rows > 0) {
                             <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Theo dõi các vết đốm bất thường, màu sắc thay đổi và tốc độ lan rộng để xử lý kịp thời.</p>
                         </div>
                     </div>
-                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col">
-                        <div class="h-40 bg-slate-100 overflow-hidden relative flex items-center justify-center">
-                            <iconify-icon icon="solar:bug-minimalistic-linear" width="40" class="text-slate-300"></iconify-icon>
-                        </div>
-                        <div class="p-5 flex-1 flex flex-col">
-                            <h4 class="text-sm font-semibold text-brandText mb-1">Kiểm soát mật độ sâu</h4>
-                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Cảnh báo sớm cho phép giám sát tần suất xuất hiện và khoanh vùng ổ dịch hại hiệu quả hơn.</p>
-                        </div>
                     </div>
-                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col">
-                        <div class="h-40 bg-slate-100 overflow-hidden relative flex items-center justify-center">
-                            <iconify-icon icon="solar:leaf-linear" width="40" class="text-slate-300"></iconify-icon>
-                        </div>
-                        <div class="p-5 flex-1 flex flex-col">
-                            <h4 class="text-sm font-semibold text-brandText mb-1">Hướng dẫn xử lý</h4>
-                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Ưu tiên biện pháp phòng ngừa và canh tác tối ưu trước khi can thiệp bằng hóa chất.</p>
-                        </div>
-                    </div>
-                </div>
             </div>
         </section>
 
-        <section id="webgis" class="w-full h-[82vh] relative overflow-hidden bg-[#0a1633]">
-            <?php
-                // Tọa độ cho SVG
-                $region_meta = [
-                    'Thôn 1 (Vùng Lúa nước)' => ['points' => '445,210 575,175 680,225 650,345 500,360 410,300', 'label_top' => '44%', 'label_left' => '49%'],
-                    'Thôn 2 (Vùng Cải xanh)' => ['points' => '230,325 390,300 500,360 480,505 300,530 180,430', 'label_top' => '66%', 'label_left' => '29%'],
-                    'Thôn 3 (Vùng Cà chua)' => ['points' => '680,145 850,120 940,230 880,330 720,310 650,220', 'label_top' => '30%', 'label_left' => '73%']
-                ];
+        <section id="webgis" class="w-full h-[80vh] relative overflow-hidden bg-slate-900 border-t border-slate-700">
+            <div id="main-webgis-map" class="absolute inset-0 w-full h-full z-0"></div>
 
-                $region_style = [];
-                foreach (array_keys($region_meta) as $name) {
-                    $count = (int)($gis_data[$name]['total'] ?? 0); // Đã sửa để lấy đúng tổng số lượng
-                    if ($count >= 25) {
-                        $region_style[$name] = ['fill' => 'rgba(239,68,68,0.34)', 'stroke' => '#f87171', 'badge' => 'bg-red-500', 'text' => 'text-red-200', 'level' => 'BÁO ĐỘNG ĐỎ'];
-                    } elseif ($count >= 10) {
-                        $region_style[$name] = ['fill' => 'rgba(245,158,11,0.30)', 'stroke' => '#fbbf24', 'badge' => 'bg-amber-500', 'text' => 'text-amber-200', 'level' => 'CẢNH BÁO VÀNG'];
-                    } else {
-                        $region_style[$name] = ['fill' => 'rgba(16,185,129,0.28)', 'stroke' => '#34d399', 'badge' => 'bg-emerald-500', 'text' => 'text-emerald-200', 'level' => 'AN TOÀN'];
-                    }
-                }
-            ?>
-
-            <div class="absolute inset-0 bg-[radial-gradient(circle_at_14%_12%,rgba(22,163,74,0.18),transparent_35%),radial-gradient(circle_at_82%_70%,rgba(56,189,248,0.12),transparent_35%),linear-gradient(180deg,#081029_0%,#0d2048_100%)]"></div>
-
-            <svg viewBox="0 0 1200 700" class="absolute inset-0 w-full h-full z-[3]" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-                <defs>
-                    <pattern id="fieldGrid" width="26" height="26" patternUnits="userSpaceOnUse">
-                        <path d="M26 0L0 0 0 26" fill="none" stroke="rgba(148,163,184,0.12)" stroke-width="1"></path>
-                    </pattern>
-                </defs>
-
-                <rect x="80" y="70" width="1030" height="560" rx="30" fill="rgba(7,18,45,0.55)" stroke="rgba(148,163,184,0.24)"></rect>
-                <rect x="90" y="80" width="1010" height="540" rx="24" fill="url(#fieldGrid)"></rect>
-
-                <path d="M130 420 C260 370, 430 460, 560 410 C700 355, 860 430, 1065 360" stroke="rgba(56,189,248,0.75)" stroke-width="16" fill="none" opacity="0.65"></path>
-                <path d="M160 195 C300 255, 510 165, 650 250 C780 335, 930 290, 1050 345" stroke="rgba(148,163,184,0.45)" stroke-width="10" fill="none" stroke-dasharray="18 12"></path>
-
-                <?php foreach ($region_meta as $name => $meta) : ?>
-                    <polygon
-                        points="<?php echo $meta['points']; ?>"
-                        fill="<?php echo $region_style[$name]['fill']; ?>"
-                        stroke="<?php echo $region_style[$name]['stroke']; ?>"
-                        stroke-width="2.5">
-                    </polygon>
-                <?php endforeach; ?>
-            </svg>
-
-            <div class="absolute top-6 left-6 w-72 bg-slate-900/80 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-5 z-20 flex flex-col gap-4">
+            <div class="absolute top-6 left-6 w-72 bg-slate-900/85 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-5 z-10 flex flex-col gap-4 pointer-events-auto">
                 <div class="flex items-center gap-2">
-                    <iconify-icon icon="solar:map-bold-duotone" width="20" class="text-white"></iconify-icon>
+                    <iconify-icon icon="solar:map-bold-duotone" width="20" class="text-brand"></iconify-icon>
                     <h3 class="text-sm font-semibold text-white tracking-wide">Trung Tâm Chỉ Huy</h3>
                 </div>
-                <p class="text-xs text-slate-300">Bản đồ mô phỏng ổ dịch với sự kết hợp phân tích của Hệ Chuyên Gia AI.</p>
-                <a href="thong_ke.php" class="inline-flex justify-center bg-brand text-white text-xs font-medium px-3 py-2 rounded-lg hover:bg-green-700 transition-colors">Mở bảng thống kê</a>
+                <p class="text-xs text-slate-300">Bản đồ mô phỏng ổ dịch tại khu vực ngoại thành Hà Nội với sự kết hợp phân tích của Hệ Chuyên Gia AI.</p>
+                <a href="thong_ke.php" class="inline-flex justify-center bg-brand text-white text-xs font-medium px-3 py-2 rounded-lg hover:bg-green-700 transition-colors">Mở bảng thống kê chi tiết</a>
             </div>
 
-            <div class="absolute top-6 right-6 w-64 bg-slate-900/80 backdrop-blur-md border border-slate-600/60 rounded-2xl p-4 z-20 space-y-3">
+            <div class="absolute top-6 right-6 w-64 bg-slate-900/85 backdrop-blur-md border border-slate-600/60 rounded-2xl p-4 z-10 space-y-3 pointer-events-auto">
                 <div class="text-[11px] uppercase tracking-widest text-slate-300">Tổng quan Mật độ</div>
-                <?php foreach ($region_meta as $kv_name => $meta) : ?>
-                    <?php $count = (int)($gis_data[$kv_name]['total'] ?? 0); ?>
+                <?php foreach ($gis_data as $kv_name => $data) : ?>
                     <div class="flex items-center justify-between text-xs text-slate-200">
                         <span class="flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 rounded-sm <?php echo $region_style[$kv_name]['badge']; ?>"></span>
+                            <span class="w-2.5 h-2.5 rounded-sm <?php echo $region_style[$kv_name]['badge'] ?? 'bg-emerald-500'; ?>"></span>
                             <?php echo htmlspecialchars($kv_name, ENT_QUOTES, 'UTF-8'); ?>
                         </span>
-                        <strong><?php echo $count; ?></strong>
+                        <strong><?php echo (int)$data['total']; ?></strong>
                     </div>
                 <?php endforeach; ?>
             </div>
-
-            <?php foreach ($region_meta as $kv_name => $meta) : ?>
-                <?php 
-                    $so_luong = (int)($gis_data[$kv_name]['total'] ?? 0); 
-                    $details = $gis_data[$kv_name]['details'] ?? [];
-                    $label_top_num = (float)str_replace('%', '', $meta['label_top']);
-                    $tooltip_below = $label_top_num <= 35;
-                    
-                    // Dự báo bệnh
-                    $loai_nhieu_nhat = '';
-                    $max_sl = 0;
-                    foreach($details as $ten => $sl) {
-                        if($sl > $max_sl) { $max_sl = $sl; $loai_nhieu_nhat = $ten; }
-                    }
-                    $key_ai = strtolower(trim($loai_nhieu_nhat));
-                    $benh_chinh = isset($expert_system[$key_ai]) ? $expert_system[$key_ai]['benh'] : 'Cần theo dõi thêm.';
-                ?>
-                <div class="absolute z-[12] group cursor-pointer" style="top: <?php echo $meta['label_top']; ?>; left: <?php echo $meta['label_left']; ?>; transform: translate(-50%, -50%);">
-                    <div class="bg-slate-900/85 border border-slate-600/70 rounded-lg px-3 py-2 text-xs text-white shadow-xl min-w-[120px] relative">
-                        <div class="font-semibold text-center"><?php echo htmlspecialchars($kv_name, ENT_QUOTES, 'UTF-8'); ?></div>
-                        <div class="text-[11px] font-bold text-center mt-1 <?php echo $region_style[$kv_name]['text']; ?>"><?php echo $so_luong; ?> cá thể</div>
-
-                        <div class="absolute <?php echo $tooltip_below ? 'top-full mt-3' : 'bottom-full mb-3'; ?> left-1/2 -translate-x-1/2 w-72 bg-slate-800 border-2 border-slate-600 rounded-xl p-4 opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none z-30 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transform <?php echo $tooltip_below ? '-translate-y-2 group-hover:translate-y-0' : 'translate-y-2 group-hover:translate-y-0'; ?> text-left cursor-default">
-                            <strong class="text-white text-sm block border-b border-slate-600 pb-2 mb-3"><?php echo htmlspecialchars($kv_name, ENT_QUOTES, 'UTF-8'); ?></strong>
-                            
-                            <div class="mb-3">
-                                <span class="<?php echo $region_style[$kv_name]['text']; ?> text-xs font-bold px-2 py-1 bg-slate-900 rounded-md">
-                                    <iconify-icon icon="solar:danger-triangle-bold" class="mr-1"></iconify-icon>
-                                    <?php echo $region_style[$kv_name]['level']; ?>
-                                </span>
-                            </div>
-                            
-                            <div class="text-[11px] font-bold text-slate-400 uppercase mb-1">Thành phần phát hiện:</div>
-                            <ul class="mb-4 space-y-1 text-xs text-slate-200 bg-slate-900/50 p-2 rounded-lg border border-slate-700">
-                                <?php if(empty($details)): ?>
-                                    <li class="text-slate-400 italic">Chưa có dữ liệu</li>
-                                <?php else: ?>
-                                    <?php foreach($details as $ten => $sl): ?>
-                                        <li class="flex justify-between border-b border-slate-700/50 last:border-0 pb-1 last:pb-0">
-                                            <span><?php echo translate_pest_name_vi($ten); ?></span>
-                                            <span class="font-bold text-white"><?php echo $sl; ?> con</span>
-                                        </li>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </ul>
-
-                            <div class="bg-red-500/10 p-2.5 rounded-lg border border-red-500/20">
-                                <strong class="text-red-400 text-[10px] uppercase block mb-1">AI Dự báo Bệnh Tương lai:</strong>
-                                <span class="text-xs text-slate-300 font-medium leading-snug"><?php echo $benh_chinh; ?></span>
-                            </div>
-                            
-                            <?php if ($tooltip_below) : ?>
-                                <div class="absolute bottom-full left-1/2 -translate-x-1/2 border-[8px] border-transparent border-b-slate-600"></div>
-                            <?php else : ?>
-                                <div class="absolute top-full left-1/2 -translate-x-1/2 border-[8px] border-transparent border-t-slate-600"></div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="w-2 h-2 rotate-45 bg-slate-900/80 border-r border-b border-slate-600/70 mx-auto -mt-1 relative z-10"></div>
-                </div>
-            <?php endforeach; ?>
         </section>
     </main>
 
@@ -753,7 +634,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
                 if (facingMode !== 'environment') {
                     return false;
                 }
-
                 try {
                     cameraStream = await navigator.mediaDevices.getUserMedia({
                         video: true,
@@ -776,7 +656,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
                 alert('Không mở được camera. Hãy cấp quyền camera và dùng HTTPS hoặc truy cập localhost.');
                 return;
             }
-
             cameraModal.classList.remove('hidden');
         };
 
@@ -811,7 +690,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
             if (!files || !files.length) {
                 return;
             }
-
             imageInput.files = files;
             setPreview(files[0]);
         });
@@ -820,19 +698,14 @@ if ($result_gis && $result_gis->num_rows > 0) {
         closeCameraBtn.addEventListener('click', closeCamera);
 
         captureBtn.addEventListener('click', () => {
-            if (!cameraStream) {
-                return;
-            }
-
+            if (!cameraStream) { return; }
             const width = cameraVideo.videoWidth || 1280;
             const height = cameraVideo.videoHeight || 720;
             cameraCanvas.width = width;
             cameraCanvas.height = height;
-
             const ctx = cameraCanvas.getContext('2d');
             ctx.drawImage(cameraVideo, 0, 0, width, height);
             capturedDataUrl = cameraCanvas.toDataURL('image/jpeg', 0.92);
-
             cameraVideo.classList.add('hidden');
             cameraCanvas.classList.remove('hidden');
         });
@@ -844,18 +717,13 @@ if ($result_gis && $result_gis->num_rows > 0) {
         });
 
         switchCameraBtn.addEventListener('click', async () => {
-            if (isSwitchingCamera) {
-                return;
-            }
-
+            if (isSwitchingCamera) { return; }
             isSwitchingCamera = true;
             const nextFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
             const started = await startCamera(nextFacingMode);
-
             if (!started) {
                 alert('Thiết bị không hỗ trợ đổi camera hoặc camera còn lại không khả dụng.');
             }
-
             isSwitchingCamera = false;
         });
 
@@ -864,7 +732,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
                 alert('Bạn chưa chụp ảnh.');
                 return;
             }
-
             capturedImageInput.value = capturedDataUrl;
             imageInput.value = '';
             setPreviewDataUrl(capturedDataUrl, 'Ảnh chụp từ camera');
@@ -880,15 +747,88 @@ if ($result_gis && $result_gis->num_rows > 0) {
         });
 
         scanForm.addEventListener('submit', (event) => {
-            const hasFile = imageInput.files && imageInput.files.length > 0;
-            const hasCapturedImage = capturedImageInput.value.trim() !== '';
-            
-            // Xóa code alert kiểm tra file ở đây vì form HTML5 (required) sẽ tự bắt buộc rồi
-            
             scanOverlay.classList.remove('hidden');
             scanOverlay.classList.add('flex');
             btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
             btnAnalyze.classList.add('opacity-70', 'cursor-not-allowed');
+        });
+    </script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const gisData = <?php echo json_encode($gis_data); ?>;
+            const regionStyles = <?php echo json_encode($region_style); ?>;
+
+            const regionCoordinates = {
+                'Thôn 1 (Vùng Lúa nước)': [20.760, 105.775], 
+                'Thôn 2 (Vùng Cải xanh)': [20.710, 105.760], 
+                'Thôn 3 (Vùng Cà chua)': [20.715, 105.810]   
+            };
+
+            const unghoaBounds = L.latLngBounds(
+                L.latLng(20.650, 105.680), 
+                L.latLng(20.820, 105.850)  
+            );
+
+            const map = L.map('main-webgis-map', {
+                center: [20.734, 105.770], 
+                zoom: 13,                    
+                minZoom: 12,                 
+                maxZoom: 18,
+                maxBounds: unghoaBounds,     
+                maxBoundsViscosity: 1.0,     
+                zoomControl: false
+            });
+
+            // THAY ĐỔI 1: Nền bản đồ Sáng (OpenStreetMap) quen thuộc với nông dân
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap',
+            }).addTo(map);
+
+            // THAY ĐỔI 2: Viền ranh giới Xanh đậm, Nét đứt to, Dày dặn
+            L.rectangle(unghoaBounds, {
+                color: "#1d4ed8", // Màu xanh dương đậm (Blue-700)
+                weight: 4,        // Dày hơn (4px)
+                fill: false, 
+                dashArray: '12, 12', // Nét đứt to và thưa hơn
+                opacity: 0.9      // Đậm nét
+            }).addTo(map);
+
+            for (const [kv_name, data] of Object.entries(gisData)) {
+                if (regionCoordinates[kv_name]) {
+                    const coords = regionCoordinates[kv_name];
+                    const total = parseInt(data.total);
+                    const style = regionStyles[kv_name] || { fill: '#10b981', level: 'AN TOÀN' };
+
+                    let circle = L.circleMarker(coords, {
+                        radius: total > 0 ? Math.min(Math.max(total * 1.5, 12), 35) : 8, 
+                        fillColor: style.fill,
+                        color: style.fill,
+                        weight: 2,
+                        opacity: 0.8,
+                        fillOpacity: 0.6 // Tăng độ đặc của màu lên chút để nổi trên nền sáng
+                    }).addTo(map);
+
+                    L.circleMarker(coords, {
+                        radius: 3, fillColor: '#ffffff', color: 'transparent', fillOpacity: 1
+                    }).addTo(map);
+
+                    // THAY ĐỔI 3: Popup nền sáng, chữ tối màu dễ đọc
+                    circle.bindPopup(`
+                        <div style="font-family: Inter, sans-serif; text-align: center; min-width: 130px;">
+                            <strong style="color: #1e293b; font-size: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; display: block; margin-bottom: 10px;">${kv_name}</strong>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #64748b; font-size: 12px;">Mức độ:</span>
+                                <span style="color: ${style.fill}; font-size: 12px; font-weight: bold;">${style.level}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="color: #64748b; font-size: 12px;">Phát hiện:</span>
+                                <strong style="color: #0f172a; font-size: 18px;">${total}</strong>
+                            </div>
+                        </div>
+                    `);
+                }
+            }
         });
     </script>
 </body>
