@@ -1,4 +1,6 @@
 <?php
+session_start();
+
 require 'db_connect.php';
 require_once 'pest_translate.php';
 
@@ -78,102 +80,109 @@ $khu_vuc = $_POST['khu_vuc'] ?? 'Chưa xác định';
 // 1. XỬ LÝ UPLOAD ẢNH & NHẬN DIỆN AI
 // -------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty($captured_image_data))) {
-    $file_tmp = '';
-    $file_name = '';
-    $file_type = 'image/jpeg';
-    $is_temp_capture = false;
-
-    if (!empty($captured_image_data)) {
-        if (preg_match('/^data:image\/(\w+);base64,/', $captured_image_data, $matches)) {
-            $extension = strtolower($matches[1]);
-            if ($extension === 'jpeg') {
-                $extension = 'jpg';
-            }
-
-            $raw_data = preg_replace('/^data:image\/\w+;base64,/', '', $captured_image_data);
-            $binary_data = base64_decode($raw_data, true);
-
-            if ($binary_data !== false) {
-                $temp_file = tempnam(sys_get_temp_dir(), 'cam_');
-                if ($temp_file !== false && file_put_contents($temp_file, $binary_data) !== false) {
-                    $file_tmp = $temp_file;
-                    $file_name = 'camera_capture.' . $extension;
-                    $file_type = 'image/' . ($extension === 'jpg' ? 'jpeg' : $extension);
-                    $is_temp_capture = true;
-                }
-            }
-        }
+    
+    if (!isset($_SESSION['user_id'])) {
+        $error_message = 'Vui lòng đăng nhập để sử dụng chức năng Phân tích AI!';
     } else {
-        $file_tmp = $_FILES['image']['tmp_name'] ?? '';
-        $file_name = $_FILES['image']['name'] ?? '';
-        $file_type = $_FILES['image']['type'] ?? 'image/jpeg';
-    }
+        $file_tmp = '';
+        $file_name = '';
+        $file_type = 'image/jpeg';
+        $is_temp_capture = false;
 
-    $is_valid_source = $is_temp_capture ? is_file($file_tmp) : is_uploaded_file($file_tmp);
+        if (!empty($captured_image_data)) {
+            if (preg_match('/^data:image\/(\w+);base64,/', $captured_image_data, $matches)) {
+                $extension = strtolower($matches[1]);
+                if ($extension === 'jpeg') {
+                    $extension = 'jpg';
+                }
 
-    if (!empty($file_name) && $is_valid_source) {
-        $api_url = 'http://127.0.0.1:5000/detect';
-        $cfile = new CURLFile($file_tmp, $file_type, $file_name);
-        $post_data = array('image' => $cfile);
+                $raw_data = preg_replace('/^data:image\/\w+;base64,/', '', $captured_image_data);
+                $binary_data = base64_decode($raw_data, true);
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $api_url);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $response = curl_exec($ch);
-        curl_close($ch);
-
-        if ($response) {
-            $data = json_decode($response, true);
-
-            if (isset($data['success']) && $data['success'] === true) {
-                $original_image = $data['original_image'] ?? '';
-                $result_image = $data['result_image'] ?? '';
-                $total_insects = (int)($data['total_insects'] ?? 0);
-                $pest_counts = is_array($data['pest_counts'] ?? null) ? $data['pest_counts'] : array();
-
-                $stmt = $conn->prepare('INSERT INTO lich_su_quet (hinh_anh_goc, hinh_anh_ket_qua, khu_vuc) VALUES (?, ?, ?)');
-                if ($stmt) {
-                    $stmt->bind_param('sss', $original_image, $result_image, $khu_vuc);
-                    $stmt->execute();
-                    $lich_su_id = $stmt->insert_id;
-                    $stmt->close();
-
-                    foreach ($pest_counts as $ten_sau => $so_luong) {
-                        $stmt2 = $conn->prepare('INSERT INTO chi_tiet_dich_hai (lich_su_id, ten_loai_sau, so_luong) VALUES (?, ?, ?)');
-                        if ($stmt2) {
-                            $count = (int)$so_luong;
-                            $stmt2->bind_param('isi', $lich_su_id, $ten_sau, $count);
-                            $stmt2->execute();
-                            $stmt2->close();
-                        }
+                if ($binary_data !== false) {
+                    $temp_file = tempnam(sys_get_temp_dir(), 'cam_');
+                    if ($temp_file !== false && file_put_contents($temp_file, $binary_data) !== false) {
+                        $file_tmp = $temp_file;
+                        $file_name = 'camera_capture.' . $extension;
+                        $file_type = 'image/' . ($extension === 'jpg' ? 'jpeg' : $extension);
+                        $is_temp_capture = true;
                     }
                 }
-
-                $result_data = array(
-                    'result_image' => $result_image,
-                    'total_insects' => $total_insects,
-                    'pest_counts' => $pest_counts,
-                    'khu_vuc' => $khu_vuc
-                );
-            } else {
-                $error_message = 'Lỗi từ AI: ' . htmlspecialchars($data['error'] ?? 'Không rõ nguyên nhân', ENT_QUOTES, 'UTF-8');
             }
         } else {
-            $error_message = 'Không thể kết nối đến AI. Hãy kiểm tra lại dịch vụ Python.';
+            $file_tmp = $_FILES['image']['tmp_name'] ?? '';
+            $file_name = $_FILES['image']['name'] ?? '';
+            $file_type = $_FILES['image']['type'] ?? 'image/jpeg';
         }
 
-        if ($is_temp_capture && is_file($file_tmp)) {
-            unlink($file_tmp);
+        $is_valid_source = $is_temp_capture ? is_file($file_tmp) : is_uploaded_file($file_tmp);
+
+        if (!empty($file_name) && $is_valid_source) {
+            $api_url = 'http://127.0.0.1:5000/detect';
+            $cfile = new CURLFile($file_tmp, $file_type, $file_name);
+            $post_data = array('image' => $cfile);
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $api_url);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            if ($response) {
+                $data = json_decode($response, true);
+
+                if (isset($data['success']) && $data['success'] === true) {
+                    $original_image = $data['original_image'] ?? '';
+                    $result_image = $data['result_image'] ?? '';
+                    $total_insects = (int)($data['total_insects'] ?? 0);
+                    $pest_counts = is_array($data['pest_counts'] ?? null) ? $data['pest_counts'] : array();
+
+                    $muc_dich = (isset($_SESSION['role']) && $_SESSION['role'] === 'home') ? 'gia_dinh' : 'nong_dan';
+                    $stmt = $conn->prepare('INSERT INTO lich_su_quet (hinh_anh_goc, hinh_anh_ket_qua, khu_vuc, muc_dich) VALUES (?, ?, ?, ?)');
+                    
+                    if ($stmt) {
+                        $stmt->bind_param('ssss', $original_image, $result_image, $khu_vuc, $muc_dich);
+                        $stmt->execute();
+                        $lich_su_id = $stmt->insert_id;
+                        $stmt->close();
+
+                        foreach ($pest_counts as $ten_sau => $so_luong) {
+                            $stmt2 = $conn->prepare('INSERT INTO chi_tiet_dich_hai (lich_su_id, ten_loai_sau, so_luong) VALUES (?, ?, ?)');
+                            if ($stmt2) {
+                                $count = (int)$so_luong;
+                                $stmt2->bind_param('isi', $lich_su_id, $ten_sau, $count);
+                                $stmt2->execute();
+                                $stmt2->close();
+                            }
+                        }
+                    }
+
+                    $result_data = array(
+                        'result_image' => $result_image,
+                        'total_insects' => $total_insects,
+                        'pest_counts' => $pest_counts,
+                        'khu_vuc' => $khu_vuc
+                    );
+                } else {
+                    $error_message = 'Lỗi từ AI: ' . htmlspecialchars($data['error'] ?? 'Không rõ nguyên nhân', ENT_QUOTES, 'UTF-8');
+                }
+            } else {
+                $error_message = 'Không thể kết nối đến AI. Hãy kiểm tra lại dịch vụ Python.';
+            }
+
+            if ($is_temp_capture && is_file($file_tmp)) {
+                unlink($file_tmp);
+            }
+        } else {
+            $error_message = 'Vui lòng chọn ảnh hợp lệ hoặc chụp ảnh bằng camera trước khi phân tích.';
         }
-    } else {
-        $error_message = 'Vui lòng chọn ảnh hợp lệ hoặc chụp ảnh bằng camera trước khi phân tích.';
     }
 }
 
 // -------------------------------------------------------------
-// 2. LẤY DỮ LIỆU BẢN ĐỒ WEBGIS (BÓC TÁCH CHI TIẾT)
+// 2. LẤY DỮ LIỆU BẢN ĐỒ WEBGIS
 // -------------------------------------------------------------
 $gis_data = [];
 $sql_gis = "SELECT ls.khu_vuc, ct.ten_loai_sau, SUM(ct.so_luong) as tong_so_luong 
@@ -197,7 +206,6 @@ if ($result_gis && $result_gis->num_rows > 0) {
     }
 }
 
-// Chuẩn bị dữ liệu mảng màu sắc cảnh báo cho bản đồ
 $region_style = [];
 foreach ($gis_data as $kv_name => $data) {
     $count = (int)$data['total'];
@@ -261,23 +269,17 @@ foreach ($gis_data as $kv_name => $data) {
             90% { opacity: 1; }
             100% { top: 100%; opacity: 0; }
         }
-
         .animate-laser { animation: laserScan 2s ease-in-out infinite; }
 
         @keyframes ticker {
             0% { transform: translateX(100%); }
             100% { transform: translateX(-100%); }
         }
-
         .animate-ticker {
             display: inline-block;
             white-space: nowrap;
             animation: ticker 25s linear infinite;
         }
-
-        /* Fix Leaflet popup style in dark mode
-        .leaflet-popup-content-wrapper { background: #1e293b; color: white; border-radius: 12px; }
-        .leaflet-popup-tip { background: #1e293b; } */
     </style>
 </head>
 <body class="bg-brandBg/90 text-brandText antialiased flex flex-col min-h-screen">
@@ -294,16 +296,30 @@ foreach ($gis_data as $kv_name => $data) {
                 <a href="#webgis" class="text-sm text-slate-500 hover:text-brand transition-colors">Bản đồ</a>
                 <a href="thong_ke.php" class="text-sm text-slate-500 hover:text-brand transition-colors">Thống kê</a>
             </div>
-            <div class="flex items-center gap-3">
-                <div class="text-right hidden md:block">
-                    <div class="text-xs font-medium text-slate-900">Nông dân 4.0</div>
-                    <div class="text-[10px] text-slate-500">Cấp bậc: Chuyên gia</div>
+            
+            <?php if(isset($_SESSION['user_id'])): ?>
+                <div class="flex items-center gap-3">
+                    <div class="text-right hidden md:block">
+                        <div class="text-xs font-medium text-slate-900"><?php echo htmlspecialchars($_SESSION['ho_ten']); ?></div>
+                        <div class="text-[10px] text-brand font-semibold">
+                            <?php echo ($_SESSION['role'] === 'farmer') ? '👨‍🌾 Nông dân' : '🪴 Gia đình'; ?>
+                        </div>
+                    </div>
+                    <div class="w-9 h-9 rounded-full bg-slate-200 border-2 border-white shadow-sm overflow-hidden">
+                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=<?php echo urlencode($_SESSION['ho_ten']); ?>" alt="avatar" class="w-full h-full object-cover">
+                    </div>
+                    <a href="logout.php" class="ml-2 text-red-500 hover:text-red-700 p-1 flex items-center" title="Đăng xuất">
+                        <iconify-icon icon="solar:logout-2-linear" width="20"></iconify-icon>
+                    </a>
                 </div>
-                <div class="w-9 h-9 rounded-full bg-slate-200 border-2 border-white shadow-sm overflow-hidden">
-                    <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="avatar" class="w-full h-full object-cover">
+            <?php else: ?>
+                <div class="flex items-center gap-3">
+                    <a href="login.php" class="bg-brand text-white px-5 py-2 rounded-full text-sm font-semibold hover:bg-green-700 shadow-md transition-all flex items-center gap-2">
+                        <iconify-icon icon="solar:user-circle-linear" width="18"></iconify-icon> Đăng Nhập
+                    </a>
                 </div>
+            <?php endif; ?>
             </div>
-        </div>
     </nav>
 
     <div class="mt-16 bg-red-50/90 backdrop-blur-sm border-b border-red-100 overflow-hidden relative h-8 flex items-center">
@@ -390,9 +406,15 @@ foreach ($gis_data as $kv_name => $data) {
                             </div>
                         </div>
 
-                        <button id="btnAnalyze" type="submit" class="w-full bg-brand hover:bg-green-700 text-white text-base font-semibold py-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 mt-2">
-                            <iconify-icon icon="solar:magic-stick-3-linear" width="20"></iconify-icon> Phân tích dữ liệu
-                        </button>
+                        <?php if(isset($_SESSION['user_id'])): ?>
+                            <button id="btnAnalyze" type="submit" class="w-full bg-brand hover:bg-green-700 text-white text-base font-semibold py-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 mt-2">
+                                <iconify-icon icon="solar:magic-stick-3-linear" width="20"></iconify-icon> Phân tích dữ liệu
+                            </button>
+                        <?php else: ?>
+                            <a href="login.php" class="w-full bg-slate-200 text-slate-500 hover:bg-slate-300 hover:text-slate-700 text-base font-semibold py-4 rounded-xl transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer text-center">
+                                <iconify-icon icon="solar:lock-keyhole-linear" width="20"></iconify-icon> Đăng nhập để Phân tích
+                            </a>
+                        <?php endif; ?>
                     </form>
 
                     <div class="w-full lg:w-[60%] bg-white rounded-2xl border border-slate-200/60 p-6 flex flex-col relative overflow-hidden shadow-sm min-h-[420px]">
@@ -415,7 +437,25 @@ foreach ($gis_data as $kv_name => $data) {
                                 </div>
 
                                 <div class="w-full h-56 bg-slate-900 rounded-xl overflow-hidden relative shadow-inner shrink-0">
-                                    <img src="results/<?php echo htmlspecialchars($result_data['result_image'], ENT_QUOTES, 'UTF-8'); ?>" alt="Kết quả AI" class="w-full h-full object-contain bg-black/70">
+                                    <?php 
+                                        $img_raw = $result_data['result_image'];
+                                        $final_src = '';
+                                        
+                                        // Nếu dữ liệu dài hơn 200 ký tự -> Chắc chắn là mã Base64
+                                        if (strlen($img_raw) > 200) {
+                                            // Kiểm tra xem đã có tiền tố 'data:image' chưa, nếu chưa thì gắn vào
+                                            $final_src = (strpos($img_raw, 'data:image') === 0) ? $img_raw : 'data:image/jpeg;base64,' . $img_raw;
+                                        } 
+                                        // Nếu là dạng URL http đầy đủ
+                                        elseif (filter_var($img_raw, FILTER_VALIDATE_URL)) {
+                                            $final_src = $img_raw;
+                                        } 
+                                        // Các trường hợp còn lại (như tên file "image_123.jpg")
+                                        else {
+                                            $final_src = htmlspecialchars($img_raw, ENT_QUOTES, 'UTF-8');
+                                        }
+                                    ?>
+                                    <img src="<?php echo $final_src; ?>" alt="Kết quả AI" class="w-full h-full object-contain bg-black/70">
                                 </div>
 
                                 <?php if (!empty($result_data['pest_counts'])) : ?>
@@ -496,6 +536,9 @@ foreach ($gis_data as $kv_name => $data) {
                     <h3 class="text-sm font-semibold text-white tracking-wide">Trung Tâm Chỉ Huy</h3>
                 </div>
                 <p class="text-xs text-slate-300">Bản đồ mô phỏng ổ dịch tại khu vực ngoại thành Hà Nội với sự kết hợp phân tích của Hệ Chuyên Gia AI.</p>
+                <div class="text-[10px] font-medium text-emerald-400 bg-emerald-900/50 px-2 py-1 rounded border border-emerald-800/50 inline-block w-max">
+                    Dữ liệu Cộng đồng (Public)
+                </div>
                 <a href="thong_ke.php" class="inline-flex justify-center bg-brand text-white text-xs font-medium px-3 py-2 rounded-lg hover:bg-green-700 transition-colors">Mở bảng thống kê chi tiết</a>
             </div>
 
@@ -746,12 +789,14 @@ foreach ($gis_data as $kv_name => $data) {
             }
         });
 
-        scanForm.addEventListener('submit', (event) => {
-            scanOverlay.classList.remove('hidden');
-            scanOverlay.classList.add('flex');
-            btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
-            btnAnalyze.classList.add('opacity-70', 'cursor-not-allowed');
-        });
+        if (scanForm && btnAnalyze) {
+            scanForm.addEventListener('submit', (event) => {
+                scanOverlay.classList.remove('hidden');
+                scanOverlay.classList.add('flex');
+                btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
+                btnAnalyze.classList.add('opacity-70', 'cursor-not-allowed');
+            });
+        }
     </script>
 
     <script>
@@ -780,18 +825,16 @@ foreach ($gis_data as $kv_name => $data) {
                 zoomControl: false
             });
 
-            // THAY ĐỔI 1: Nền bản đồ Sáng (OpenStreetMap) quen thuộc với nông dân
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap',
+                attribution: '&copy; OpenStreetMap'
             }).addTo(map);
 
-            // THAY ĐỔI 2: Viền ranh giới Xanh đậm, Nét đứt to, Dày dặn
             L.rectangle(unghoaBounds, {
-                color: "#1d4ed8", // Màu xanh dương đậm (Blue-700)
-                weight: 4,        // Dày hơn (4px)
+                color: "#1d4ed8", 
+                weight: 4,        
                 fill: false, 
-                dashArray: '12, 12', // Nét đứt to và thưa hơn
-                opacity: 0.9      // Đậm nét
+                dashArray: '12, 12', 
+                opacity: 0.9      
             }).addTo(map);
 
             for (const [kv_name, data] of Object.entries(gisData)) {
@@ -806,14 +849,13 @@ foreach ($gis_data as $kv_name => $data) {
                         color: style.fill,
                         weight: 2,
                         opacity: 0.8,
-                        fillOpacity: 0.6 // Tăng độ đặc của màu lên chút để nổi trên nền sáng
+                        fillOpacity: 0.6 
                     }).addTo(map);
 
                     L.circleMarker(coords, {
                         radius: 3, fillColor: '#ffffff', color: 'transparent', fillOpacity: 1
                     }).addTo(map);
 
-                    // THAY ĐỔI 3: Popup nền sáng, chữ tối màu dễ đọc
                     circle.bindPopup(`
                         <div style="font-family: Inter, sans-serif; text-align: center; min-width: 130px;">
                             <strong style="color: #1e293b; font-size: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; display: block; margin-bottom: 10px;">${kv_name}</strong>
