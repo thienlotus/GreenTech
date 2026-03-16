@@ -165,3 +165,14 @@ COMMIT;
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `ho_ten` varchar(100) NOT NULL,
+  `so_dien_thoai` varchar(20) NOT NULL,
+  `mat_khau` varchar(255) NOT NULL,
+  `khu_vuc` varchar(100) DEFAULT NULL,
+  `role` varchar(20) NOT NULL DEFAULT 'farmer' COMMENT 'farmer: Nông dân, home: Gia đình',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `so_dien_thoai` (`so_dien_thoai`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
