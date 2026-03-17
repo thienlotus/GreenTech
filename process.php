@@ -2,6 +2,8 @@
 // Thiết lập trả về định dạng JSON để giao diện web xử lý mượt mà
 header('Content-Type: application/json; charset=utf-8');
 
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'ai_config.php';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // 1. Nhận dữ liệu từ Form
     $khu_vuc = $_POST['khu_vuc'] ?? 'Chưa xác định';
@@ -11,8 +13,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // 2. Gói ảnh lại và gửi sang Python AI (YOLOv8 đang chạy ở cổng 5000)
-    $python_api_url = 'http://127.0.0.1:5000/detect';
+    // 2. Gói ảnh lại và gửi sang Python AI endpoint
+    $python_api_url = get_ai_detect_endpoint();
     $cfile = new CURLFile($_FILES['image']['tmp_name'], $_FILES['image']['type'], $_FILES['image']['name']);
     $data = ['image' => $cfile];
 
