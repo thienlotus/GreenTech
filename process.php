@@ -18,17 +18,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $cfile = new CURLFile($_FILES['image']['tmp_name'], $_FILES['image']['type'], $_FILES['image']['name']);
     $data = ['image' => $cfile];
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $python_api_url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $response = false;
+    $http_code = 0;
+    $curl_error = '';
+    $maxAttempts = get_ai_retry_attempts();
+    $timeout = get_ai_timeout_seconds();
+    $relaxSslVerify = should_relax_ai_ssl_verify();
 
-    if ($http_code !== 200 || !$response) {
-        echo json_encode(['success' => false, 'error' => 'AI Server đang ngủ hoặc mất kết nối.']);
+    for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $python_api_url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json', 'Expect:']);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'GreenTech-Process/1.0');
+
+        if (stripos($python_api_url, 'https://') === 0) {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, !$relaxSslVerify);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $relaxSslVerify ? 0 : 2);
+        }
+
+        $response = curl_exec($ch);
+        $http_code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = (string)curl_error($ch);
+        curl_close($ch);
+
+        if ($response !== false && $http_code >= 200 && $http_code < 300) {
+            break;
+        }
+
+        $retryableHttp = in_array($http_code, [408, 425, 429, 500, 502, 503, 504, 522, 524], true);
+        $retryableNetwork = $response === false;
+        if (($retryableHttp || $retryableNetwork) && $attempt < $maxAttempts) {
+            usleep(600000);
+        }
+    }
+
+    if ($response === false || $http_code < 200 || $http_code >= 300) {
+        $detail = trim(($http_code > 0 ? ('HTTP ' . $http_code . ' ') : '') . $curl_error);
+        echo json_encode(['success' => false, 'error' => 'AI Server đang ngủ hoặc mất kết nối.' . ($detail !== '' ? (' ' . $detail) : '')]);
         exit;
     }
 
