@@ -222,24 +222,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty(
 
     if (!empty($file_name) && $is_valid_source) {
         
-        // Gọi thẳng lên Hugging Face
-        $api_url = 'https://levuthien-greentech-ai-api.hf.space/detect';
+        // Dùng endpoint cấu hình để dễ chuyển giữa local/prod và rollout model mới.
+        $api_url = get_ai_detect_endpoint();
         
         $cfile = new CURLFile($file_tmp, $file_type, $file_name);
         $post_data = array('image' => $cfile);
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $api_url);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60); // Tăng thời gian chờ AI
-        
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $response = false;
+        $http_code = 0;
+        $curl_error = '';
 
-        if ($response && $http_code === 200) {
+        $max_attempts = get_ai_retry_attempts();
+        $request_timeout = get_ai_timeout_seconds();
+        $relax_ssl_verify = should_relax_ai_ssl_verify();
+
+        for ($attempt = 1; $attempt <= $max_attempts; $attempt++) {
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $api_url);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
+            curl_setopt($ch, CURLOPT_TIMEOUT, $request_timeout);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Accept: application/json',
+                'Expect:'
+            ));
+            curl_setopt($ch, CURLOPT_USERAGENT, 'GreenTech-Web/1.0');
+
+            if (stripos($api_url, 'https://') === 0) {
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, !$relax_ssl_verify);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $relax_ssl_verify ? 0 : 2);
+            }
+
+            $response = curl_exec($ch);
+            $http_code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curl_error = (string)curl_error($ch);
+            curl_close($ch);
+
+            if ($response !== false && $http_code >= 200 && $http_code < 300) {
+                break;
+            }
+
+            $is_retryable_http = in_array($http_code, array(408, 425, 429, 500, 502, 503, 504, 522, 524), true);
+            $is_retryable_network = $response === false;
+            if (($is_retryable_http || $is_retryable_network) && $attempt < $max_attempts) {
+                usleep(600000);
+            }
+        }
+
+        if ($response !== false && $http_code >= 200 && $http_code < 300) {
             $data = json_decode($response, true);
 
             if (isset($data['success']) && $data['success'] === true) {
@@ -287,7 +321,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty(
                 $error_message = 'Lỗi từ AI: ' . htmlspecialchars($data['error'] ?? 'Không rõ nguyên nhân', ENT_QUOTES, 'UTF-8');
             }
         } else {
-            $error_message = 'Không thể kết nối đến AI. Hãy kiểm tra lại dịch vụ Python (Hugging Face).';
+            $details = array();
+            if ($http_code > 0) {
+                $details[] = 'HTTP ' . $http_code;
+            }
+            if ($curl_error !== '') {
+                $details[] = $curl_error;
+            }
+
+            $detail_text = !empty($details) ? (' Chi tiết: ' . implode(' | ', $details)) : '';
+            $error_message = 'Không thể kết nối đến AI. Vui lòng kiểm tra endpoint Hugging Face.' . htmlspecialchars($detail_text, ENT_QUOTES, 'UTF-8');
         }
 
         if ($is_temp_capture && is_file($file_tmp)) {
@@ -773,14 +816,58 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col">
+                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col cursor-pointer">
                         <div class="h-40 bg-slate-100 overflow-hidden relative">
                             <img src="https://images.unsplash.com/photo-1590682680695-43b964a3ae17?q=80&w=400&auto=format&fit=crop" alt="Bệnh" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
-                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-red-500">Sâu bệnh</div>
+                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-red-500">Kỹ năng</div>
                         </div>
                         <div class="p-5 flex-1 flex flex-col">
-                            <h4 class="display-heading text-sm text-brandText mb-1">Dấu hiệu lá bị hại</h4>
-                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Theo dõi các vết đốm bất thường, màu sắc thay đổi và tốc độ lan rộng để xử lý kịp thời.</p>
+                            <h4 class="display-heading text-sm text-brandText mb-1">"Đọc vị" sức khỏe cây qua lá</h4>
+                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Nhận biết sớm các triệu chứng khuyết lá, đốm vàng, xoăn ngọn để phát hiện sâu bệnh trước khi bùng phát trên diện rộng.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col cursor-pointer">
+                        <div class="h-40 bg-slate-100 overflow-hidden relative">
+                            <img src="https://images.pexels.com/photos/2255935/pexels-photo-2255935.jpeg?auto=compress&cs=tinysrgb&w=900" alt="Sâu lúa" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-orange-600">Sâu bệnh lúa</div>
+                        </div>
+                        <div class="p-5 flex-1 flex flex-col">
+                            <h4 class="display-heading text-sm text-brandText mb-1">Sâu cuốn lá nhỏ hại lúa</h4>
+                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Cơn ác mộng của ruộng lúa giai đoạn đẻ nhánh. Hướng dẫn cách tìm ổ bướm và nhận diện vệt bạc trắng trên lá.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col cursor-pointer">
+                        <div class="h-40 bg-slate-100 overflow-hidden relative">
+                            <img src="https://images.unsplash.com/photo-1591857177580-dc82b9ac4e1e?q=80&w=400&auto=format&fit=crop" alt="Bọ nhảy" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-orange-600">Sâu bệnh rau</div>
+                        </div>
+                        <div class="p-5 flex-1 flex flex-col">
+                            <h4 class="display-heading text-sm text-brandText mb-1">Bọ nhảy bắp cải: Nhỏ có võ</h4>
+                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Kẻ thù số 1 của vùng chuyên canh rau họ thập tự. Cách xử lý đất và luân canh cắt đứt vòng đời bọ nhảy hiệu quả.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col cursor-pointer">
+                        <div class="h-40 bg-slate-100 overflow-hidden relative">
+                            <img src="https://images.pexels.com/photos/772807/pexels-photo-772807.jpeg?auto=compress&cs=tinysrgb&w=900" alt="Sinh học" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-emerald-600">Sinh học</div>
+                        </div>
+                        <div class="p-5 flex-1 flex flex-col">
+                            <h4 class="display-heading text-sm text-brandText mb-1">Chế phẩm nấm diệt sâu an toàn</h4>
+                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Sử dụng nấm xanh (Metarhizium) và nấm trắng (Beauveria) thay thế thuốc hóa học, bảo vệ thiên địch và môi trường.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group flex flex-col cursor-pointer">
+                        <div class="h-40 bg-slate-100 overflow-hidden relative">
+                            <img src="https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=400&auto=format&fit=crop" alt="AI Scan" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                            <div class="absolute top-2 right-2 bg-white/90 backdrop-blur text-[10px] font-semibold px-2 py-1 rounded text-sky-600">Hướng dẫn App</div>
+                        </div>
+                        <div class="p-5 flex-1 flex flex-col">
+                            <h4 class="display-heading text-sm text-brandText mb-1">Mẹo chụp ảnh để AI chuẩn 99%</h4>
+                            <p class="text-xs text-slate-500 font-light line-clamp-2 mb-4">Hướng dẫn lấy nét, căn sáng và chọn góc chụp mẫu vật côn trùng giúp hệ thống GreenTech phân tích tốt nhất.</p>
                         </div>
                     </div>
                 </div>
@@ -862,9 +949,9 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                     </button>
                 </div>
                 <div class="p-4 space-y-3">
-                    <div class="w-full aspect-[4/3] bg-slate-900 rounded-xl overflow-hidden relative">
-                        <video id="cameraVideo" class="w-full h-full object-cover" autoplay playsinline></video>
-                        <canvas id="cameraCanvas" class="hidden w-full h-full"></canvas>
+                    <div id="cameraFrame" class="w-full bg-slate-900 rounded-xl overflow-hidden relative" style="aspect-ratio: 4 / 3;">
+                        <video id="cameraVideo" class="w-full h-full object-contain bg-black" autoplay playsinline></video>
+                        <canvas id="cameraCanvas" class="hidden w-full h-full object-contain bg-black"></canvas>
                     </div>
                     <p class="text-xs text-slate-500">Trên điện thoại, vui lòng cho phép quyền camera để chụp ảnh mẫu vật.</p>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -901,6 +988,7 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         const usePhotoBtn = document.getElementById('usePhotoBtn');
         const cameraVideo = document.getElementById('cameraVideo');
         const cameraCanvas = document.getElementById('cameraCanvas');
+        const cameraFrame = document.getElementById('cameraFrame');
 
         let cameraStream = null;
         let capturedDataUrl = '';
@@ -908,12 +996,37 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         let isSwitchingCamera = false;
         let previewObjectUrl = null;
 
+        const getCameraFrameSize = () => {
+            let width = cameraVideo.videoWidth || 0;
+            let height = cameraVideo.videoHeight || 0;
+
+            if ((!width || !height) && cameraStream) {
+                const track = cameraStream.getVideoTracks()[0];
+                const settings = track ? track.getSettings() : null;
+                width = Number(settings && settings.width ? settings.width : 0);
+                height = Number(settings && settings.height ? settings.height : 0);
+            }
+
+            return { width, height };
+        };
+
+        const updateCameraFrameRatio = () => {
+            if (!cameraFrame) return;
+            const size = getCameraFrameSize();
+            if (size.width > 0 && size.height > 0) {
+                cameraFrame.style.aspectRatio = `${size.width} / ${size.height}`;
+            } else {
+                cameraFrame.style.aspectRatio = '4 / 3';
+            }
+        };
+
         const setPreviewDataUrl = (dataUrl, label) => {
             previewImage.src = dataUrl;
             previewImage.classList.remove('hidden');
             dropzoneShade.classList.remove('hidden');
             fileLabel.textContent = label;
         };
+
 
         const setPreview = (file) => {
             if (!file || !file.type.startsWith('image/')) {
@@ -958,6 +1071,9 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                     video: { facingMode: { ideal: facingMode } }, audio: false
                 });
                 cameraVideo.srcObject = cameraStream;
+                cameraVideo.onloadedmetadata = () => {
+                    updateCameraFrameRatio();
+                };
                 cameraVideo.classList.remove('hidden');
                 cameraCanvas.classList.add('hidden');
                 capturedDataUrl = '';
@@ -968,6 +1084,9 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                 try {
                     cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                     cameraVideo.srcObject = cameraStream;
+                    cameraVideo.onloadedmetadata = () => {
+                        updateCameraFrameRatio();
+                    };
                     cameraVideo.classList.remove('hidden');
                     cameraCanvas.classList.add('hidden');
                     capturedDataUrl = '';
@@ -979,7 +1098,7 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         const openCamera = async () => {
             const started = await startCamera(currentFacingMode);
             if (!started) {
-                alert('Không mở được camera. Hãy cấp quyền camera và dùng HTTPS hoặc truy cập localhost.');
+                alert('Không mở được camera. Hãy cấp quyền camera và truy cập bằng HTTPS.');
                 return;
             }
             cameraModal.classList.remove('hidden');
@@ -1023,8 +1142,13 @@ $monitoredRegionDisplay = $monitoredRegionCount;
 
         captureBtn.addEventListener('click', () => {
             if (!cameraStream) return;
-            const width = cameraVideo.videoWidth || 1280;
-            const height = cameraVideo.videoHeight || 720;
+            const size = getCameraFrameSize();
+            const width = size.width;
+            const height = size.height;
+            if (!width || !height) {
+                alert('Camera đang khởi tạo, vui lòng chờ 1-2 giây rồi chụp lại.');
+                return;
+            }
             cameraCanvas.width = width;
             cameraCanvas.height = height;
             const ctx = cameraCanvas.getContext('2d');
@@ -1067,7 +1191,7 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             }
         });
 
-        scanForm.addEventListener('submit', (event) => {
+        scanForm.addEventListener('submit', () => {
             scanOverlay.classList.remove('hidden');
             scanOverlay.classList.add('flex');
             btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
