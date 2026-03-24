@@ -1,348 +1,471 @@
 <?php
-require 'db_connect.php';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+require_once 'db_connect.php';
 require_once 'pest_translate.php';
 
-$region_order = [
-    'Thôn 1 (Vùng Lúa nước)',
-    'Thôn 2 (Vùng Cải xanh)',
-    'Thôn 3 (Vùng Cà chua)'
+function normalize_role_value(string $role): string
+{
+    $value = trim($role);
+    if (function_exists('mb_strtolower')) {
+        $value = mb_strtolower($value, 'UTF-8');
+    } else {
+        $value = strtolower($value);
+    }
+
+    $value = str_replace(['-', ' '], '_', $value);
+
+    if (in_array($value, ['nong_dan', 'nongdan', 'nông_dân', 'nôngdân'], true)) {
+        return 'nong_dan';
+    }
+
+    if (in_array($value, ['ho_gia_dinh', 'hogiadinh', 'hộ_gia_đình', 'hộ_gia_dinh'], true)) {
+        return 'ho_gia_dinh';
+    }
+
+    if (in_array($value, ['khach', 'khách', 'khach_vang_lai', 'khách_vãng_lai'], true)) {
+        return 'khach';
+    }
+
+    return $value;
+}
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: auth.php?type=info&msg=Vui+l%C3%B2ng+%C4%91%C4%83ng+nh%E1%BA%ADp&tab=login');
+    exit;
+}
+
+$currentUserId = (int)$_SESSION['user_id'];
+$currentRole = normalize_role_value((string)($_SESSION['role'] ?? 'khach'));
+$currentUserName = trim((string)($_SESSION['full_name'] ?? $_SESSION['username'] ?? 'Người dùng'));
+$_SESSION['role'] = $currentRole;
+
+if (!in_array($currentRole, ['ho_gia_dinh', 'nong_dan'], true)) {
+    header('Location: index.php');
+    exit;
+}
+
+$isHouseholdRole = $currentRole === 'ho_gia_dinh';
+$isFarmerRole = $currentRole === 'nong_dan';
+$dashboardLink = $isFarmerRole ? 'dashboard_nongdan.php' : 'dashboard_giadinh.php';
+$roleLabel = $isFarmerRole ? 'Nông dân' : 'Hộ gia đình';
+
+$householdAddress = '';
+$scanScopeKey = 'HOGD_USER_' . $currentUserId;
+$farmerVillage = '';
+
+$userStmt = $conn->prepare('SELECT dia_chi_nha, khu_vuc_giam_sat FROM users WHERE id = ? LIMIT 1');
+if ($userStmt) {
+    $userStmt->bind_param('i', $currentUserId);
+    $userStmt->execute();
+    $userResult = $userStmt->get_result();
+    $userRow = $userResult ? $userResult->fetch_assoc() : null;
+    $userStmt->close();
+    $householdAddress = trim((string)($userRow['dia_chi_nha'] ?? ''));
+    $farmerVillage = trim((string)($userRow['khu_vuc_giam_sat'] ?? ''));
+}
+
+$expert_system = [
+    'aphids' => [
+        'symptom' => 'Lá quăn xoắn, chồi non kém phát triển, mặt lá có dịch ngọt và dễ xuất hiện nấm bồ hóng.',
+        'treatment' => 'Phun nước áp lực nhẹ vào sáng sớm, dùng dầu neem hoặc xà phòng sinh học và thả bọ rùa nếu có thể.'
+    ],
+    'mites' => [
+        'symptom' => 'Mặt dưới lá có chấm nhỏ li ti, lá ngả vàng rồi cháy sạm, cây suy yếu nhanh khi trời hanh khô.',
+        'treatment' => 'Tăng độ ẩm khu vực trồng, cắt bỏ lá nặng, dùng chế phẩm sinh học đặc trị nhện đỏ theo liều khuyến cáo.'
+    ],
+    'snail' => [
+        'symptom' => 'Lá non bị cắn nham nhở vào ban đêm, cây con dễ gãy hoặc mất ngọn.',
+        'treatment' => 'Vệ sinh khu vực ẩm thấp, đặt bẫy sinh học, rải vôi bột vòng ngoài luống để hạn chế ốc sên xâm nhập.'
+    ],
+    'whitefly' => [
+        'symptom' => 'Lá úa vàng, cây còi cọc, có thể lây bệnh virus làm giảm năng suất rau và cây cảnh.',
+        'treatment' => 'Dùng bẫy dính màu vàng, luân phiên chế phẩm sinh học và cắt bỏ lá bị nhiễm nặng.'
+    ],
+    'thrips' => [
+        'symptom' => 'Lá non bạc màu, quăn mép, hoa và trái non bị sần sùi hoặc biến dạng.',
+        'treatment' => 'Tỉa tán cây cho thoáng, giữ ẩm ổn định và phun chế phẩm thảo mộc hoặc sinh học vào chiều mát.'
+    ],
+    'flea beetle' => [
+        'symptom' => 'Lá bị thủng nhiều lỗ nhỏ như rây, cây non chậm lớn và giảm khả năng quang hợp.',
+        'treatment' => 'Dùng lưới chắn côn trùng, dọn sạch cỏ dại, phun dịch tỏi ớt hoặc chế phẩm sinh học đúng liều.'
+    ],
+    'default' => [
+        'symptom' => 'Cần theo dõi thêm biểu hiện trên lá, thân và tốc độ lây lan trong vài ngày tới.',
+        'treatment' => 'Ưu tiên biện pháp sinh học, vệ sinh khu vực trồng, giữ mật độ cây hợp lý và theo dõi định kỳ.'
+    ]
 ];
 
-$region_data = [];
-foreach ($region_order as $region_name) {
-    $region_data[$region_name] = [
-        'total' => 0,
-        'details' => []
-    ];
+$result = null;
+$stmt = null;
+if ($isHouseholdRole) {
+    $hasUserIdColumn = false;
+    $columnCheck = $conn->query("SHOW COLUMNS FROM lich_su_quet LIKE 'user_id'");
+    if ($columnCheck && $columnCheck->num_rows > 0) {
+        $hasUserIdColumn = true;
+    }
+
+    if ($hasUserIdColumn) {
+        $sql = "SELECT ct.ten_loai_sau, SUM(ct.so_luong) AS tong_so_luong
+                FROM chi_tiet_dich_hai ct
+                INNER JOIN lich_su_quet ls ON ct.lich_su_id = ls.id
+                WHERE ls.user_id = ?
+                GROUP BY ct.ten_loai_sau
+                ORDER BY tong_so_luong DESC";
+        $stmt = $conn->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param('i', $currentUserId);
+            $stmt->execute();
+            $result = $stmt->get_result();
+        }
+    } else {
+        $legacyScope = $householdAddress !== '' ? $householdAddress : $scanScopeKey;
+        $sql = "SELECT ct.ten_loai_sau, SUM(ct.so_luong) AS tong_so_luong
+                FROM chi_tiet_dich_hai ct
+                INNER JOIN lich_su_quet ls ON ct.lich_su_id = ls.id
+                WHERE ls.khu_vuc IN (?, ?)
+                GROUP BY ct.ten_loai_sau
+                ORDER BY tong_so_luong DESC";
+        $stmt = $conn->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param('ss', $scanScopeKey, $legacyScope);
+            $stmt->execute();
+            $result = $stmt->get_result();
+        }
+    }
+} elseif ($isFarmerRole && $farmerVillage !== '') {
+    $sql = "SELECT ct.ten_loai_sau, SUM(ct.so_luong) AS tong_so_luong
+            FROM chi_tiet_dich_hai ct
+            INNER JOIN lich_su_quet ls ON ct.lich_su_id = ls.id
+            WHERE ls.khu_vuc = ? OR ls.khu_vuc LIKE CONCAT(?, ' (%)')
+            GROUP BY ct.ten_loai_sau
+            ORDER BY tong_so_luong DESC";
+    $stmt = $conn->prepare($sql);
+    if ($stmt) {
+        $stmt->bind_param('ss', $farmerVillage, $farmerVillage);
+        $stmt->execute();
+        $result = $stmt->get_result();
+    }
 }
 
-$sql = "SELECT ls.khu_vuc, ct.ten_loai_sau, SUM(ct.so_luong) as tong_so
-        FROM lich_su_quet ls
-        JOIN chi_tiet_dich_hai ct ON ls.id = ct.lich_su_id
-        WHERE ls.khu_vuc IS NOT NULL AND ls.khu_vuc != ''
-        GROUP BY ls.khu_vuc, ct.ten_loai_sau";
-$result = $conn->query($sql);
+$chartLabels = [];
+$chartValues = [];
+$reportItems = [];
+$totalInsects = 0;
+
+$palette = [
+    '#22c55e', '#06b6d4', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'
+];
 
 if ($result && $result->num_rows > 0) {
+    $colorIndex = 0;
     while ($row = $result->fetch_assoc()) {
-        $khu_vuc = $row['khu_vuc'];
-        $ten_sau = $row['ten_loai_sau'];
-        $so_luong = (int)$row['tong_so'];
+        $pestKey = strtolower(trim((string)($row['ten_loai_sau'] ?? '')));
+        $quantity = (int)($row['tong_so_luong'] ?? 0);
+        $totalInsects += $quantity;
 
-        if (!isset($region_data[$khu_vuc])) {
-            $region_data[$khu_vuc] = ['total' => 0, 'details' => []];
+        $info = $expert_system[$pestKey] ?? $expert_system['default'];
+        $displayName = translate_pest_name_vi($pestKey);
+        if ($displayName === $pestKey || trim($displayName) === '') {
+            $displayName = ucfirst($pestKey);
         }
 
-        $region_data[$khu_vuc]['total'] += $so_luong;
-        $region_data[$khu_vuc]['details'][$ten_sau] = $so_luong;
+        $color = $palette[$colorIndex % count($palette)];
+        $colorIndex++;
+
+        $chartLabels[] = $displayName;
+        $chartValues[] = $quantity;
+
+        $reportItems[] = [
+            'name' => $displayName,
+            'quantity' => $quantity,
+            'symptom' => $info['symptom'],
+            'treatment' => $info['treatment'],
+            'color' => $color
+        ];
     }
 }
 
-$region_labels = [];
-$region_totals = [];
-$region_colors = [];
-$canh_bao_data = [];
-
-foreach ($region_data as $region_name => $data) {
-    $total = (int)$data['total'];
-    $region_labels[] = $region_name;
-    $region_totals[] = $total;
-
-    if ($total >= 25) {
-        $region_colors[] = '#ef4444'; // Đỏ (Red)
-        $canh_bao_data[$region_name] = 'Báo động đỏ';
-    } elseif ($total >= 10) {
-        $region_colors[] = '#f59e0b'; // Cam (Amber)
-        $canh_bao_data[$region_name] = 'Cảnh báo vàng';
-    } else {
-        $region_colors[] = '#10b981'; // Xanh lá (Emerald)
-        $canh_bao_data[$region_name] = 'An toàn';
-    }
+if (isset($stmt) && $stmt) {
+    $stmt->close();
 }
 
-$tong_ca_the = array_sum($region_totals);
-$khu_canh_bao_max = '-';
-$gia_tri_max = 0;
-if (!empty($region_totals)) {
-    $max_index = array_keys($region_totals, max($region_totals))[0];
-    $khu_canh_bao_max = $region_labels[$max_index] ?? '-';
-    $gia_tri_max = $region_totals[$max_index] ?? 0;
-}
+$scanCount = count($reportItems);
+$navAvatarPath = trim((string)($_SESSION['avatar_path'] ?? ''));
+$navAvatarUrl = $navAvatarPath !== ''
+    ? $navAvatarPath
+    : ('https://api.dicebear.com/7.x/avataaars/svg?seed=' . urlencode($currentUserName !== '' ? $currentUserName : 'user'));
 ?>
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GreenTech | Thống kê theo vùng</title>
-    <link rel="icon" type="image/svg+xml" href="assets/greentech-favicon.svg">
+    <title>GreenTech | Thống kê dịch hại</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: { sans: ['Inter', 'sans-serif'] },
-                    colors: {
-                        brand: '#2E7D32',
-                        brandBg: '#F8FAFC',
-                        brandText: '#1E293B'
-                    }
-                }
-            }
-        };
-    </script>
+    <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         body {
-            font-family: 'Inter', sans-serif;
-            background-image: url('https://png.pngtree.com/thumb_back/fh260/background/20240911/pngtree-open-book-with-green-plant-sprouting-in-sunlight-bokeh-background-image_16143810.jpg');
-            background-size: cover;
-            background-position: center;
-            background-attachment: scroll;
-            background-repeat: no-repeat;
+            font-family: 'Be Vietnam Pro', sans-serif;
+            background:
+                radial-gradient(circle at 8% 12%, rgba(34, 197, 94, 0.20) 0%, transparent 36%),
+                radial-gradient(circle at 90% 8%, rgba(14, 165, 233, 0.17) 0%, transparent 35%),
+                linear-gradient(145deg, #f8fafc 0%, #ecfeff 45%, #f0fdf4 100%);
         }
-        .font-semibold { font-weight: 500 !important; }
-        
-        /* Chỉnh lại giao diện Popup Leaflet cho bản đồ Thống kê
-        .leaflet-popup-content-wrapper { background: #1e293b; color: white; border-radius: 12px; }
-        .leaflet-popup-tip { background: #1e293b; } */
+
+        .glass {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: blur(12px);
+        }
     </style>
 </head>
-<body class="bg-brandBg/90 text-brandText antialiased min-h-screen">
-    <nav class="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/50">
-        <div class="max-w-[1400px] mx-auto px-6 h-16 flex justify-between items-center">
+<body class="min-h-screen text-slate-800">
+    <nav class="fixed top-0 inset-x-0 z-50 border-b border-slate-200/60 bg-white/85 backdrop-blur-xl">
+        <div class="mx-auto flex h-16 w-full max-w-[1400px] items-center justify-between px-4 sm:px-6">
             <div class="flex items-center gap-2">
-                <iconify-icon icon="solar:leaf-bold-duotone" width="24" class="text-brand"></iconify-icon>
-                <span class="font-semibold tracking-tighter text-lg text-brand">GREENTECH</span>
+                <iconify-icon icon="solar:leaf-bold-duotone" width="24" class="text-emerald-700"></iconify-icon>
+                <span class="text-lg font-semibold tracking-tighter text-emerald-700">GREENTECH</span>
             </div>
-            <div class="hidden md:flex space-x-8">
-                <a href="index.php#home" class="text-sm text-slate-500 hover:text-brand transition-colors">Trang chủ</a>
-                <a href="index.php#scanner" class="text-sm text-slate-500 hover:text-brand transition-colors">Quét AI</a>
-                <a href="index.php#webgis" class="text-sm text-slate-500 hover:text-brand transition-colors">Bản đồ</a>
-                <a href="thong_ke.php" class="text-sm text-brand font-semibold">Thống kê vùng</a>
+
+            <div class="hidden items-center gap-7 md:flex">
+                <a href="index.php#home" class="text-sm font-medium text-slate-500 hover:text-emerald-700">Trang chủ</a>
+                <a href="index.php#scanner" class="text-sm font-medium text-slate-500 hover:text-emerald-700">Quét AI</a>
+                <a href="index.php#encyclopedia" class="text-sm font-medium text-slate-500 hover:text-emerald-700">Cẩm nang</a>
+                <a href="index.php#webgis" class="text-sm font-medium text-slate-500 hover:text-emerald-700">Bản đồ</a>
+                <a href="thong_ke.php" class="text-sm font-semibold text-emerald-700">Thống kê</a>
+                <a href="<?php echo htmlspecialchars($dashboardLink, ENT_QUOTES, 'UTF-8'); ?>" class="text-sm font-semibold text-emerald-700">Dashboard</a>
             </div>
-            <a href="index.php#scanner" class="inline-flex items-center gap-1 bg-brand text-white text-xs px-3 py-2 rounded-lg hover:bg-green-700 transition-colors">
-                <iconify-icon icon="solar:camera-linear" width="14"></iconify-icon> Quét ảnh mới
-            </a>
+
+            <div class="flex items-center gap-2 sm:gap-3">
+                <div class="hidden items-center gap-2 sm:gap-3 md:flex">
+                    <div class="text-right">
+                        <div class="text-xs font-semibold text-slate-900"><?php echo htmlspecialchars($currentUserName, ENT_QUOTES, 'UTF-8'); ?></div>
+                        <div class="text-[11px] text-slate-500">Vai trò: <?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                    </div>
+                    <div class="h-9 w-9 overflow-hidden rounded-full border-2 border-white bg-slate-200 shadow-sm">
+                        <img src="<?php echo htmlspecialchars($navAvatarUrl, ENT_QUOTES, 'UTF-8'); ?>" alt="avatar" class="h-full w-full object-cover">
+                    </div>
+                    <a href="profile.php" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Hồ sơ</a>
+                    <a href="logout.php" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100">Đăng xuất</a>
+                </div>
+
+                <button id="mobileMenuToggle" type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm md:hidden" aria-label="Mở menu" aria-controls="mobileMenuPanel" aria-expanded="false">
+                    <iconify-icon icon="solar:hamburger-menu-linear" width="20"></iconify-icon>
+                </button>
+            </div>
+        </div>
+
+        <div id="mobileMenuPanel" class="hidden border-t border-slate-200/70 bg-white/95 px-4 pb-4 pt-3 backdrop-blur-xl md:hidden">
+            <div class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div class="h-10 w-10 overflow-hidden rounded-full border-2 border-white bg-slate-200 shadow-sm">
+                    <img src="<?php echo htmlspecialchars($navAvatarUrl, ENT_QUOTES, 'UTF-8'); ?>" alt="avatar" class="h-full w-full object-cover">
+                </div>
+                <div>
+                    <div class="text-sm font-semibold text-slate-900"><?php echo htmlspecialchars($currentUserName, ENT_QUOTES, 'UTF-8'); ?></div>
+                    <div class="text-[11px] text-slate-500">Vai trò: <?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+            </div>
+
+            <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <a href="index.php#home" class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-medium text-slate-700 hover:bg-slate-50">Trang chủ</a>
+                <a href="index.php#scanner" class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-medium text-slate-700 hover:bg-slate-50">Quét AI</a>
+                <a href="index.php#encyclopedia" class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-medium text-slate-700 hover:bg-slate-50">Cẩm nang</a>
+                <a href="index.php#webgis" class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-medium text-slate-700 hover:bg-slate-50">Bản đồ</a>
+                <a href="thong_ke.php" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700">Thống kê</a>
+                <a href="<?php echo htmlspecialchars($dashboardLink, ENT_QUOTES, 'UTF-8'); ?>" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700">Dashboard</a>
+            </div>
+
+            <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <a href="profile.php" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-center font-semibold text-slate-700 hover:bg-slate-50">Hồ sơ</a>
+                <a href="logout.php" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-center font-semibold text-rose-700 hover:bg-rose-100">Đăng xuất</a>
+            </div>
         </div>
     </nav>
 
-    <main class="pt-24 pb-12 px-6">
-        <section class="max-w-[1240px] mx-auto bg-white/90 backdrop-blur-md rounded-3xl border border-white/60 shadow-xl overflow-hidden">
-            <div class="p-8 md:p-10 border-b border-slate-200/70 bg-gradient-to-r from-green-50 to-slate-50">
-                <h1 class="text-2xl md:text-3xl font-semibold tracking-tight text-brandText">Thống Kê Mật Độ & Bản Đồ Phân Bố</h1>
-                <p class="text-sm text-slate-600 mt-2">Dữ liệu được cập nhật theo thời gian thực từ hệ thống nhận diện AI.</p>
-            </div>
-
-            <div class="p-8 md:p-10 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div class="text-[11px] uppercase tracking-wider text-slate-500">Tổng cá thể ghi nhận</div>
-                    <div class="text-3xl font-semibold text-slate-900 mt-2"><?php echo (int)$tong_ca_the; ?></div>
+    <main class="mx-auto w-full max-w-7xl px-4 pb-8 pt-24 sm:px-6">
+        <section class="glass rounded-3xl border border-white/70 p-6 shadow-sm sm:p-8">
+            <div class="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+                <div>
+                    <h1 class="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+                        <?php echo $isFarmerRole ? 'Báo cáo dịch hại theo thôn giám sát' : 'Báo cáo thống kê sâu hại tại vườn nhà'; ?>
+                    </h1>
+                    <p class="mt-2 max-w-2xl text-sm text-slate-600">
+                        <?php echo $isFarmerRole
+                            ? 'Dữ liệu được tổng hợp theo thôn bạn phụ trách, giúp so sánh nhanh mật độ sâu hại và xác định ưu tiên xử lý.'
+                            : 'Dữ liệu dưới đây chỉ lấy theo tài khoản hộ gia đình hiện tại. Hệ thống tổng hợp số lượng từng loài côn trùng đã quét và gợi ý hướng xử lý sinh học an toàn.'; ?>
+                    </p>
+                    <?php if ($isHouseholdRole && $householdAddress !== ''): ?>
+                        <p class="mt-2 text-xs text-sky-700">Vị trí đã đồng bộ: <?php echo htmlspecialchars($householdAddress, ENT_QUOTES, 'UTF-8'); ?></p>
+                    <?php endif; ?>
+                    <?php if ($isFarmerRole): ?>
+                        <p class="mt-2 text-xs text-sky-700">Thôn giám sát: <?php echo htmlspecialchars($farmerVillage !== '' ? $farmerVillage : 'Chưa thiết lập trong hồ sơ', ENT_QUOTES, 'UTF-8'); ?></p>
+                    <?php endif; ?>
                 </div>
-                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div class="text-[11px] uppercase tracking-wider text-slate-500">Số vùng giám sát</div>
-                    <div class="text-3xl font-semibold text-slate-900 mt-2"><?php echo count($region_data); ?></div>
-                </div>
-                <div class="rounded-2xl border border-amber-100 bg-amber-50 p-4">
-                    <div class="text-[11px] uppercase tracking-wider text-amber-700">Vùng rủi ro cao nhất</div>
-                    <div class="text-base font-semibold text-amber-800 mt-2"><?php echo htmlspecialchars($khu_canh_bao_max, ENT_QUOTES, 'UTF-8'); ?></div>
-                    <div class="text-sm text-amber-700 mt-1"><?php echo (int)$gia_tri_max; ?> cá thể</div>
-                </div>
-            </div>
-
-            <div class="px-8 md:px-10 pb-10 grid grid-cols-1 xl:grid-cols-[58%_42%] gap-6">
-                <div class="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm flex flex-col gap-6">
-                    
-                    <div>
-                        <h2 class="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
-                            <iconify-icon icon="solar:map-point-bold-duotone" class="text-brand text-lg"></iconify-icon> 
-                            Bản đồ Mật độ (Khu vực Hà Nội)
-                        </h2>
-                        <div id="webgis-map" class="w-full h-[350px] rounded-xl border border-slate-200 z-0"></div>
+                <div class="grid grid-cols-2 gap-3 md:w-[320px]">
+                    <div class="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                        <div class="text-[11px] uppercase tracking-wider text-slate-500">Tổng cá thể</div>
+                        <div class="mt-1 text-2xl font-extrabold text-slate-900"><?php echo (int)$totalInsects; ?></div>
                     </div>
-
-                    <hr class="border-slate-100">
-
-                    <div>
-                        <h2 class="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
-                            <iconify-icon icon="solar:chart-square-bold-duotone" class="text-brand text-lg"></iconify-icon> 
-                            So sánh biểu đồ cột
-                        </h2>
-                        <div class="w-full h-[250px]">
-                            <canvas id="regionChart"></canvas>
-                        </div>
-                    </div>
-
-                </div>
-
-                <div class="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
-                    <h2 class="text-sm font-semibold text-slate-700 mb-4">Cảnh báo nhanh theo vùng</h2>
-                    <div class="space-y-3">
-                        <?php foreach ($region_data as $region_name => $data) : ?>
-                            <?php
-                                $total = (int)$data['total'];
-                                $badge_class = 'bg-emerald-100 text-emerald-700 border-emerald-200';
-                                if ($total >= 25) {
-                                    $badge_class = 'bg-red-100 text-red-700 border-red-200';
-                                } elseif ($total >= 10) {
-                                    $badge_class = 'bg-amber-100 text-amber-700 border-amber-200';
-                                }
-                            ?>
-                            <div class="rounded-xl border border-slate-200 p-3 bg-slate-50">
-                                <div class="flex items-center justify-between gap-3">
-                                    <div class="text-sm font-semibold text-slate-800"><?php echo htmlspecialchars($region_name, ENT_QUOTES, 'UTF-8'); ?></div>
-                                    <span class="text-[11px] border px-2 py-1 rounded-full <?php echo $badge_class; ?>"><?php echo $canh_bao_data[$region_name] ?? 'An toàn'; ?></span>
-                                </div>
-                                <div class="text-xs text-slate-600 mt-1">Tổng số ghi nhận: <strong><?php echo $total; ?></strong></div>
-
-                                <?php if (!empty($data['details'])) : ?>
-                                    <ul class="mt-2 space-y-1 text-xs text-slate-700">
-                                        <?php foreach ($data['details'] as $ten_sau => $sl) : ?>
-                                            <li class="flex items-center justify-between border-b border-slate-200/70 last:border-0 pb-1 last:pb-0">
-                                                <span><?php echo htmlspecialchars(translate_pest_name_vi($ten_sau), ENT_QUOTES, 'UTF-8'); ?></span>
-                                                <strong><?php echo (int)$sl; ?></strong>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ul>
-                                <?php else : ?>
-                                    <p class="text-xs text-slate-500 mt-2">Chưa có dữ liệu chi tiết.</p>
-                                <?php endif; ?>
-                            </div>
-                        <?php endforeach; ?>
+                    <div class="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                        <div class="text-[11px] uppercase tracking-wider text-slate-500">Loài đã ghi nhận</div>
+                        <div class="mt-1 text-2xl font-extrabold text-slate-900"><?php echo (int)$scanCount; ?></div>
                     </div>
                 </div>
             </div>
         </section>
+
+        <section class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[44%_56%]">
+            <div class="glass rounded-3xl border border-white/70 p-6 shadow-sm">
+                <h2 class="text-base font-bold text-slate-800">Cơ cấu côn trùng theo tỷ lệ</h2>
+                <p class="mt-1 text-xs text-slate-500">
+                    <?php echo $isFarmerRole
+                        ? 'Biểu đồ Doughnut thể hiện tỷ trọng từng loài sâu hại trong thôn bạn phụ trách.'
+                        : 'Biểu đồ Doughnut thể hiện tỷ trọng từng loài trong tổng số cá thể đã quét.'; ?>
+                </p>
+                <div class="mt-5 h-[300px]">
+                    <canvas id="householdChart"></canvas>
+                </div>
+            </div>
+
+            <div class="glass rounded-3xl border border-white/70 p-6 shadow-sm">
+                <h2 class="text-base font-bold text-slate-800">Danh sách cảnh báo và khuyến nghị</h2>
+                <p class="mt-1 text-xs text-slate-500">Mỗi thẻ gồm triệu chứng điển hình và cách xử lý sinh học tương ứng.</p>
+
+                <?php if (empty($reportItems)): ?>
+                    <div class="mt-6 rounded-2xl border border-slate-200 bg-white/80 p-6 text-center">
+                        <p class="text-sm font-semibold text-slate-700">
+                            <?php echo $isFarmerRole ? 'Chưa có dữ liệu quét cho thôn giám sát hiện tại.' : 'Chưa có dữ liệu quét cho hộ gia đình này.'; ?>
+                        </p>
+                        <p class="mt-1 text-xs text-slate-500">Hãy quay lại trang chủ và quét AI để hệ thống bắt đầu thống kê.</p>
+                    </div>
+                <?php else: ?>
+                    <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                        <?php foreach ($reportItems as $item): ?>
+                            <article class="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm">
+                                <div class="flex items-center justify-between gap-3">
+                                    <h3 class="text-sm font-extrabold text-slate-800"><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></h3>
+                                    <span class="rounded-full px-3 py-1 text-xs font-bold text-white" style="background-color: <?php echo htmlspecialchars($item['color'], ENT_QUOTES, 'UTF-8'); ?>;">
+                                        <?php echo (int)$item['quantity']; ?> cá thể
+                                    </span>
+                                </div>
+
+                                <div class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                    <div class="text-[11px] font-bold uppercase tracking-wide text-amber-700">Triệu chứng gây hại</div>
+                                    <p class="mt-1 text-xs leading-relaxed text-slate-700"><?php echo htmlspecialchars($item['symptom'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                </div>
+
+                                <div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                                    <div class="text-[11px] font-bold uppercase tracking-wide text-emerald-700">Cách xử lý an toàn/sinh học</div>
+                                    <p class="mt-1 text-xs leading-relaxed text-slate-700"><?php echo htmlspecialchars($item['treatment'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                </div>
+                            </article>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </section>
     </main>
 
-    <footer class="text-center pb-8">
-        <p class="text-[11px] text-slate-500 font-medium tracking-wide">© 2026 GreenTech. Hệ thống nhận diện côn trùng bằng AI.</p>
-    </footer>
-
     <script>
-        const regionLabels = <?php echo json_encode(array_values($region_labels)); ?>;
-        const regionTotals = <?php echo json_encode(array_values($region_totals)); ?>;
-        const regionColors = <?php echo json_encode(array_values($region_colors)); ?>;
+        const labels = <?php echo json_encode($chartLabels); ?>;
+        const values = <?php echo json_encode($chartValues); ?>;
+        const colors = <?php echo json_encode(array_map(static function ($item) {
+            return $item['color'];
+        }, $reportItems)); ?>;
 
-        const ctx = document.getElementById('regionChart').getContext('2d');
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: regionLabels,
-                datasets: [{
-                    label: 'Tổng số cá thể phát hiện',
-                    data: regionTotals,
-                    backgroundColor: regionColors,
-                    borderColor: '#ffffff',
-                    borderWidth: 1.5,
-                    borderRadius: 8,
-                    maxBarThickness: 52
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: (context) => ' ' + context.parsed.y + ' cá thể'
+        const chartCanvas = document.getElementById('householdChart');
+        if (chartCanvas && labels.length > 0) {
+            const ctx = chartCanvas.getContext('2d');
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: colors,
+                        borderColor: '#ffffff',
+                        borderWidth: 2,
+                        hoverOffset: 10
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '58%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                boxWidth: 12,
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                color: '#334155',
+                                font: {
+                                    size: 12,
+                                    family: 'Be Vietnam Pro'
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const total = context.dataset.data.reduce((sum, v) => sum + v, 0);
+                                    const val = context.raw;
+                                    const percent = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0';
+                                    return ` ${context.label}: ${val} cá thể (${percent}%)`;
+                                }
+                            }
                         }
                     }
-                },
-                scales: {
-                    x: {
-                        ticks: { color: '#334155', font: { size: 11 } },
-                        grid: { display: false }
-                    },
-                    y: {
-                        beginAtZero: true,
-                        ticks: { color: '#64748b', precision: 0 },
-                        grid: { color: 'rgba(148,163,184,0.18)' }
-                    }
                 }
-            }
-        });
-    </script>
+            });
+        }
 
-    <script>
-        document.addEventListener("DOMContentLoaded", function() {
-            const regionCoordinates = {
-                'Thôn 1 (Vùng Lúa nước)': [20.760, 105.775],
-                'Thôn 2 (Vùng Cải xanh)': [20.710, 105.760],
-                'Thôn 3 (Vùng Cà chua)': [20.715, 105.810]
+        const mobileMenuToggle = document.getElementById('mobileMenuToggle');
+        const mobileMenuPanel = document.getElementById('mobileMenuPanel');
+
+        if (mobileMenuToggle && mobileMenuPanel) {
+            const menuIcon = mobileMenuToggle.querySelector('iconify-icon');
+
+            const setMobileMenuState = (isOpen) => {
+                mobileMenuPanel.classList.toggle('hidden', !isOpen);
+                mobileMenuToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+                if (menuIcon) {
+                    menuIcon.setAttribute('icon', isOpen ? 'solar:close-circle-linear' : 'solar:hamburger-menu-linear');
+                }
             };
 
-            const unghoaBounds = L.latLngBounds(
-                L.latLng(20.650, 105.680),
-                L.latLng(20.820, 105.850)
-            );
-
-            const map = L.map('webgis-map', {
-                center: [20.734, 105.770],
-                zoom: 12,                    
-                minZoom: 12,
-                maxZoom: 18,
-                maxBounds: unghoaBounds,
-                maxBoundsViscosity: 1.0,
-                zoomControl: false
+            mobileMenuToggle.addEventListener('click', () => {
+                const isOpen = mobileMenuToggle.getAttribute('aria-expanded') === 'true';
+                setMobileMenuState(!isOpen);
             });
 
-            // Nền sáng OpenStreetMap
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap'
-            }).addTo(map);
-            
-            // Viền đậm
-            L.rectangle(unghoaBounds, {color: "#1d4ed8", weight: 4, fill: false, dashArray: '12, 12', opacity: 0.9}).addTo(map);
+            mobileMenuPanel.querySelectorAll('a').forEach((link) => {
+                link.addEventListener('click', () => setMobileMenuState(false));
+            });
 
-            for (let i = 0; i < regionLabels.length; i++) {
-                let rName = regionLabels[i];
-                let rTotal = regionTotals[i];
-                let rColor = regionColors[i];
-
-                if (regionCoordinates[rName]) {
-                    let coords = regionCoordinates[rName];
-
-                    let circle = L.circleMarker(coords, {
-                        radius: rTotal > 0 ? Math.min(Math.max(rTotal * 1.5, 12), 35) : 8,
-                        fillColor: rColor,
-                        color: rColor,
-                        weight: 2,
-                        opacity: 0.8,
-                        fillOpacity: 0.6
-                    }).addTo(map);
-
-                    L.circleMarker(coords, {radius: 3, fillColor: '#ffffff', color: 'transparent', fillOpacity: 1}).addTo(map);
-
-                    let levelText = rTotal >= 25 ? 'BÁO ĐỘNG ĐỎ' : (rTotal >= 10 ? 'CẢNH BÁO' : 'AN TOÀN');
-
-                    // Popup chữ tối
-                    circle.bindPopup(`
-                        <div style="font-family: Inter, sans-serif; text-align: center; min-width: 130px;">
-                            <strong style="color: #1e293b; font-size: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; display: block; margin-bottom: 10px;">${rName}</strong>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                <span style="color: #64748b; font-size: 12px;">Mức độ:</span>
-                                <span style="color: ${rColor}; font-size: 12px; font-weight: bold;">${levelText}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="color: #64748b; font-size: 12px;">Phát hiện:</span>
-                                <strong style="color: #0f172a; font-size: 18px;">${rTotal}</strong>
-                            </div>
-                        </div>
-                    `);
+            document.addEventListener('click', (event) => {
+                const target = event.target;
+                if (!(target instanceof Node)) {
+                    return;
                 }
-            }
-        });
+                if (!mobileMenuPanel.contains(target) && !mobileMenuToggle.contains(target)) {
+                    setMobileMenuState(false);
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                if (window.innerWidth >= 768) {
+                    setMobileMenuState(false);
+                }
+            });
+        }
     </script>
 </body>
 </html>
