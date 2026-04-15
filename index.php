@@ -232,8 +232,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty(
         $http_code = 0;
         $curl_error = '';
 
-        $max_attempts = get_ai_retry_attempts();
-        $request_timeout = get_ai_timeout_seconds();
+        $max_attempts = get_ai_detect_retry_attempts();
+        $request_timeout = get_ai_detect_timeout_seconds();
+        $connect_timeout = get_ai_detect_connect_timeout_seconds();
         $relax_ssl_verify = should_relax_ai_ssl_verify();
 
         for ($attempt = 1; $attempt <= $max_attempts; $attempt++) {
@@ -242,10 +243,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty(
             curl_setopt($ch, CURLOPT_POST, 1);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $connect_timeout);
             curl_setopt($ch, CURLOPT_TIMEOUT, $request_timeout);
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
             curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+            curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
             curl_setopt($ch, CURLOPT_HTTPHEADER, array(
                 'Accept: application/json',
                 'Expect:'
@@ -269,7 +271,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_FILES['image']) || !empty(
             $is_retryable_http = in_array($http_code, array(408, 425, 429, 500, 502, 503, 504, 522, 524), true);
             $is_retryable_network = $response === false;
             if (($is_retryable_http || $is_retryable_network) && $attempt < $max_attempts) {
-                usleep(600000);
+                $delay_ms = min(1800, 600 * $attempt);
+                usleep($delay_ms * 1000);
             }
         }
 
@@ -578,6 +581,31 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
         }
         .leaflet-popup.guest-lock-popup .leaflet-popup-tip { background: rgba(255, 255, 255, 0.9); }
+
+        @keyframes liveAlertFlash {
+            0% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+            50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.18); }
+            100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .live-alert-fresh {
+            animation: liveAlertFlash 1.2s ease-out;
+        }
+
+        .live-status-idle {
+            color: #334155;
+            background: #e2e8f0;
+        }
+
+        .live-status-running {
+            color: #065f46;
+            background: #d1fae5;
+        }
+
+        .live-status-error {
+            color: #991b1b;
+            background: #fee2e2;
+        }
     </style>
 </head>
 <body class="bg-brandBg/90 text-brandText antialiased flex flex-col min-h-screen">
@@ -695,11 +723,14 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                             </div>
                         </label>
 
-                        <div class="flex gap-3">
-                            <button id="openCameraBtn" type="button" class="flex-1 bg-white border border-slate-200 text-slate-600 text-sm font-medium py-2.5 rounded-xl shadow-sm hover:bg-slate-50 flex items-center justify-center gap-2">
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <button id="openCameraBtn" type="button" class="bg-white border border-slate-200 text-slate-600 text-sm font-medium py-2.5 rounded-xl shadow-sm hover:bg-slate-50 flex items-center justify-center gap-2">
                                 <iconify-icon icon="solar:camera-bold" width="16"></iconify-icon> Mở camera
                             </button>
-                            <a href="thong_ke.php" class="flex-1 bg-white border border-slate-200 text-slate-600 text-sm font-medium py-2.5 rounded-xl shadow-sm hover:bg-slate-50 flex items-center justify-center gap-2">
+                            <button id="openLiveMonitorBtn" type="button" class="bg-white border border-emerald-200 text-emerald-700 text-sm font-semibold py-2.5 rounded-xl shadow-sm hover:bg-emerald-50 flex items-center justify-center gap-2">
+                                <iconify-icon icon="solar:video-frame-play-horizontal-bold" width="16"></iconify-icon> Giám sát trực tiếp
+                            </button>
+                            <a href="thong_ke.php" class="bg-white border border-slate-200 text-slate-600 text-sm font-medium py-2.5 rounded-xl shadow-sm hover:bg-slate-50 flex items-center justify-center gap-2">
                                 <iconify-icon icon="solar:chart-square-linear" width="16"></iconify-icon> Xem thống kê
                             </a>
                         </div>
@@ -965,6 +996,144 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         </div>
     </div>
 
+    <div id="liveMonitorModal" class="fixed inset-0 z-[70] hidden">
+        <div class="absolute inset-0 bg-slate-950/92"></div>
+        <div class="relative h-full w-full overflow-y-auto">
+            <div class="mx-auto flex min-h-full w-full max-w-6xl items-start justify-center p-0 sm:p-4">
+                <div class="w-full min-h-screen overflow-hidden border border-slate-700 bg-slate-950 text-slate-100 shadow-2xl sm:min-h-0 sm:rounded-2xl">
+                    <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-700 px-4 py-3 sm:px-5">
+                        <div>
+                            <h3 class="display-heading text-sm text-slate-100">Giám sát chuyển động sâu hại trực tiếp</h3>
+                            <p class="mt-1 text-xs text-slate-300">Ưu tiên màn hình camera rõ ràng. Bảng phân tích chi tiết nằm ở phần thu gọn bên dưới.</p>
+                        </div>
+                        <button id="closeLiveMonitorBtn" type="button" class="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-800">
+                            Đóng
+                        </button>
+                    </div>
+
+                    <div class="space-y-3 p-3 sm:p-4">
+                        <section class="space-y-3">
+                            <div id="liveVideoFrame" class="relative w-full overflow-hidden rounded-xl bg-black ring-1 ring-white/10" style="height: min(74svh, 82vh);">
+                                <video id="liveVideo" class="h-full w-full object-cover" autoplay playsinline></video>
+                                <canvas id="liveOverlayCanvas" class="pointer-events-none absolute inset-0 h-full w-full"></canvas>
+                            </div>
+
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button id="startLiveMonitorBtn" type="button" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Bắt đầu giám sát</button>
+                                <button id="stopLiveMonitorBtn" type="button" class="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300" disabled>Dừng giám sát</button>
+                                <button id="exportLiveReportBtn" type="button" class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">Xuất báo cáo</button>
+                                <button id="viewHistoryBtn" type="button" class="rounded-lg bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-700">Xem lịch sử</button>
+                                <button id="switchLiveCameraBtn" type="button" class="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700">Đổi camera</button>
+                                <button id="toggleLiveFitBtn" type="button" class="rounded-lg border border-slate-500 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Khung đầy: Bật</button>
+                                <button id="liveFullscreenBtn" type="button" class="rounded-lg border border-slate-500 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Toàn màn hình</button>
+                                <button id="openCameraFromLiveBtn" type="button" class="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50">Chụp ảnh phân tích</button>
+                            </div>
+
+                            <div class="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                                <label class="text-xs text-slate-300">
+                                    <span class="mb-1 block font-semibold text-slate-100">Chu kỳ phân tích realtime</span>
+                                    <select id="liveIntervalSelect" class="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none">
+                                        <option value="1000">Nhanh (1.0 giây)</option>
+                                        <option value="1500" selected>Chuẩn (1.5 giây)</option>
+                                        <option value="2200">Tiết kiệm (2.2 giây)</option>
+                                    </select>
+                                </label>
+                                <div class="rounded-xl border border-slate-700 bg-slate-900/75 px-3 py-2">
+                                    <div class="text-[11px] uppercase tracking-wider text-slate-400">Trạng thái live</div>
+                                    <div id="liveStatusPill" class="live-status-idle mt-1 inline-flex rounded-full px-3 py-1 text-[11px] font-bold">Sẵn sàng khởi động giám sát</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <details class="rounded-xl border border-slate-700 bg-slate-900/70 p-3 text-slate-100">
+                            <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-slate-300">Mở bảng phân tích chi tiết</summary>
+                            <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                                <div class="rounded-xl border border-emerald-300/30 bg-emerald-400/10 p-3">
+                                    <div class="text-[11px] uppercase tracking-wider text-emerald-200">Đánh giá lây lan realtime</div>
+                                    <div class="mt-2 grid grid-cols-2 gap-2 text-sm text-slate-100">
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Mức ảnh hưởng</div>
+                                            <div id="liveImpactLevel" class="font-bold text-emerald-300">Nhẹ</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Điểm ảnh hưởng</div>
+                                            <div id="liveImpactScore" class="font-bold text-slate-100">0/100</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Rủi ro</div>
+                                            <div id="liveRiskLevel" class="font-bold text-slate-100">Thấp</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Vận tốc TB</div>
+                                            <div id="liveAvgSpeed" class="font-bold text-slate-100">0 px/s</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Đang hiện trên live</div>
+                                            <div id="liveVisibleCount" class="font-bold text-slate-100">0 cá thể</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Hướng lan chính</div>
+                                            <div id="liveDominantDirection" class="font-bold text-slate-100">Không rõ</div>
+                                        </div>
+                                        <div>
+                                            <div class="text-[11px] text-slate-400">Mức lan rộng</div>
+                                            <div id="liveSpreadLevel" class="font-bold text-slate-100">Ổn định</div>
+                                        </div>
+                                    </div>
+                                    <p id="liveSummaryNote" class="mt-2 text-xs text-emerald-100">Chưa có dữ liệu theo dõi, hãy bấm Bắt đầu giám sát.</p>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-700 bg-slate-900 p-3">
+                                    <div class="text-[11px] uppercase tracking-wider text-slate-400">Loài đang xuất hiện</div>
+                                    <div id="liveSpeciesStats" class="mt-2 flex flex-wrap gap-2 text-xs">
+                                        <span class="rounded-full bg-slate-700 px-2 py-1 font-semibold text-slate-200">Chưa ghi nhận</span>
+                                    </div>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-700 bg-slate-900 p-3">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <div class="text-[11px] uppercase tracking-wider text-slate-400">Cá thể đang theo dõi</div>
+                                        <span class="text-[10px] text-slate-500">Realtime</span>
+                                    </div>
+                                    <div class="mt-2 max-h-44 overflow-auto rounded-lg border border-slate-700">
+                                        <table class="min-w-full text-xs">
+                                            <thead class="bg-slate-800 text-slate-300">
+                                                <tr>
+                                                    <th class="px-2 py-1 text-left">Loài</th>
+                                                    <th class="px-2 py-1 text-left">Hướng di chuyển</th>
+                                                    <th class="px-2 py-1 text-right">Tốc độ (px/s)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="liveTrackTableBody" class="divide-y divide-slate-800">
+                                                <tr>
+                                                    <td colspan="3" class="px-2 py-3 text-center text-slate-400">Chưa có dữ liệu</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-700 bg-slate-900 p-3">
+                                    <div class="text-[11px] uppercase tracking-wider text-slate-400">Lịch sử đổi hướng lây lan</div>
+                                    <ul id="liveSpreadEventList" class="mt-2 max-h-28 space-y-2 overflow-auto text-xs text-slate-300">
+                                        <li class="rounded-lg bg-slate-800 px-2 py-1.5">Chưa ghi nhận đổi hướng di chuyển.</li>
+                                    </ul>
+                                </div>
+
+                                <div class="rounded-xl border border-rose-300/40 bg-rose-500/10 p-3 lg:col-span-2">
+                                    <div class="text-[11px] uppercase tracking-wider text-rose-200">Thông báo trực tiếp khi đang quay</div>
+                                    <ul id="liveAlertList" class="mt-2 max-h-32 space-y-2 overflow-auto text-xs text-rose-100">
+                                        <li class="rounded-lg border border-rose-200/40 bg-slate-900/70 px-2 py-1.5">Sẵn sàng nhận cảnh báo mới.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <footer class="bg-white/90 backdrop-blur-md border-t border-slate-200 py-8 text-center">
         <p class="text-[11px] text-slate-400 font-medium tracking-wide">© 2026 GreenTech. Hệ thống nhận diện côn trùng bằng AI.</p>
     </footer>
@@ -979,6 +1148,7 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         const scanForm = document.getElementById('scanForm');
         const scanOverlay = document.getElementById('scanOverlay');
         const btnAnalyze = document.getElementById('btnAnalyze');
+
         const openCameraBtn = document.getElementById('openCameraBtn');
         const cameraModal = document.getElementById('cameraModal');
         const closeCameraBtn = document.getElementById('closeCameraBtn');
@@ -990,11 +1160,91 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         const cameraCanvas = document.getElementById('cameraCanvas');
         const cameraFrame = document.getElementById('cameraFrame');
 
+        const openLiveMonitorBtn = document.getElementById('openLiveMonitorBtn');
+        const liveMonitorModal = document.getElementById('liveMonitorModal');
+        const closeLiveMonitorBtn = document.getElementById('closeLiveMonitorBtn');
+        const liveVideoFrame = document.getElementById('liveVideoFrame');
+        const liveVideo = document.getElementById('liveVideo');
+        const liveOverlayCanvas = document.getElementById('liveOverlayCanvas');
+        const startLiveMonitorBtn = document.getElementById('startLiveMonitorBtn');
+        const stopLiveMonitorBtn = document.getElementById('stopLiveMonitorBtn');
+        const exportLiveReportBtn = document.getElementById('exportLiveReportBtn');
+        const viewHistoryBtn = document.getElementById('viewHistoryBtn');
+        const switchLiveCameraBtn = document.getElementById('switchLiveCameraBtn');
+        const toggleLiveFitBtn = document.getElementById('toggleLiveFitBtn');
+        const liveFullscreenBtn = document.getElementById('liveFullscreenBtn');
+        const openCameraFromLiveBtn = document.getElementById('openCameraFromLiveBtn');
+        const liveIntervalSelect = document.getElementById('liveIntervalSelect');
+        const liveStatusPill = document.getElementById('liveStatusPill');
+        const liveImpactLevel = document.getElementById('liveImpactLevel');
+        const liveImpactScore = document.getElementById('liveImpactScore');
+        const liveRiskLevel = document.getElementById('liveRiskLevel');
+        const liveAvgSpeed = document.getElementById('liveAvgSpeed');
+        const liveVisibleCount = document.getElementById('liveVisibleCount');
+        const liveDominantDirection = document.getElementById('liveDominantDirection');
+        const liveSpreadLevel = document.getElementById('liveSpreadLevel');
+        const liveSummaryNote = document.getElementById('liveSummaryNote');
+        const liveSpeciesStats = document.getElementById('liveSpeciesStats');
+        const liveTrackTableBody = document.getElementById('liveTrackTableBody');
+        const liveSpreadEventList = document.getElementById('liveSpreadEventList');
+        const liveAlertList = document.getElementById('liveAlertList');
+
+        const liveCaptureCanvas = document.createElement('canvas');
+        const liveApiEndpoint = 'process_live.php';
+        const LIVE_MAX_FRAME_WIDTH = 640;
+        const LIVE_JPEG_QUALITY = 0.55;
+        const LIVE_REQUEST_TIMEOUT_MS = 15000;
+        const LIVE_DYNAMIC_MIN_INTERVAL_MS = 900;
+        const LIVE_DYNAMIC_MAX_INTERVAL_MS = 3500;
+        const LIVE_ERROR_BACKOFF_MS = 700;
+        const CAPTURE_JPEG_QUALITY = 0.85;
+
+        const pestNameMap = {
+            aphids: 'Rệp mềm',
+            bocanhcung: 'Bọ cánh cứng',
+            chauchau: 'Châu chấu',
+            ocsen: 'Ốc sên',
+            sauhai: 'Sâu hại'
+        };
+
         let cameraStream = null;
         let capturedDataUrl = '';
         let currentFacingMode = 'environment';
         let isSwitchingCamera = false;
         let previewObjectUrl = null;
+
+        let liveMonitorStream = null;
+        let liveFacingMode = 'environment';
+        let liveSwitchingCamera = false;
+        let liveRequestInFlight = false;
+        let liveMonitoringTimer = null;
+        let liveRequestController = null;
+        let liveIsRunning = false;
+        let liveSessionId = '';
+        let liveNextDelayMs = 1500;
+        let liveConsecutiveTimeouts = 0;
+        let liveAudioCtx = null;
+        let liveVideoObjectFitMode = 'cover';
+        let liveLastFrameSize = null;
+        let liveLastDetections = [];
+        let liveLastHeatmap = [];
+        let liveMovementSummary = null;
+        let liveSessionHistory = [];  // Luu lich su sessions
+
+        const toDisplayPestName = (name) => {
+            const normalized = String(name || '').trim().toLowerCase();
+            return pestNameMap[normalized] || name || 'Côn trùng';
+        };
+
+        const escapeHtml = (value) => {
+            const text = String(value ?? '');
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        };
 
         const getCameraFrameSize = () => {
             let width = cameraVideo.videoWidth || 0;
@@ -1027,7 +1277,6 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             fileLabel.textContent = label;
         };
 
-
         const setPreview = (file) => {
             if (!file || !file.type.startsWith('image/')) {
                 if (previewObjectUrl) {
@@ -1057,6 +1306,16 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             if (cameraStream) {
                 cameraStream.getTracks().forEach((track) => track.stop());
                 cameraStream = null;
+            }
+        };
+
+        const stopLiveCamera = () => {
+            if (liveMonitorStream) {
+                liveMonitorStream.getTracks().forEach((track) => track.stop());
+                liveMonitorStream = null;
+            }
+            if (liveVideo) {
+                liveVideo.srcObject = null;
             }
         };
 
@@ -1091,11 +1350,775 @@ $monitoredRegionDisplay = $monitoredRegionCount;
                     cameraCanvas.classList.add('hidden');
                     capturedDataUrl = '';
                     return true;
-                } catch (fallbackError) { return false; }
+                } catch (fallbackError) {
+                    return false;
+                }
+            }
+        };
+
+        const startLiveCamera = async (facingMode) => {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                return false;
+            }
+
+            stopLiveCamera();
+            try {
+                liveMonitorStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: facingMode } },
+                    audio: false
+                });
+                liveVideo.srcObject = liveMonitorStream;
+                liveVideo.onloadedmetadata = () => {
+                    applyLiveVideoFitMode();
+                    resizeLiveOverlayCanvas();
+                    drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
+                };
+                liveFacingMode = facingMode;
+                return true;
+            } catch (error) {
+                if (facingMode !== 'environment') {
+                    return false;
+                }
+                try {
+                    liveMonitorStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                    liveVideo.srcObject = liveMonitorStream;
+                    liveVideo.onloadedmetadata = () => {
+                        applyLiveVideoFitMode();
+                        resizeLiveOverlayCanvas();
+                        drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
+                    };
+                    return true;
+                } catch (fallbackError) {
+                    return false;
+                }
+            }
+        };
+
+        const updateLiveStatusPill = (text, state = 'idle') => {
+            if (!liveStatusPill) return;
+            liveStatusPill.textContent = text;
+            liveStatusPill.classList.remove('live-status-idle', 'live-status-running', 'live-status-error');
+            if (state === 'running') {
+                liveStatusPill.classList.add('live-status-running');
+            } else if (state === 'error') {
+                liveStatusPill.classList.add('live-status-error');
+            } else {
+                liveStatusPill.classList.add('live-status-idle');
+            }
+        };
+
+        const applyLiveVideoFitMode = () => {
+            if (!liveVideo) return;
+            const useCover = liveVideoObjectFitMode !== 'contain';
+            liveVideo.classList.toggle('object-cover', useCover);
+            liveVideo.classList.toggle('object-contain', !useCover);
+
+            if (toggleLiveFitBtn) {
+                toggleLiveFitBtn.textContent = useCover ? 'Khung đầy: Bật' : 'Khung đầy: Tắt';
+            }
+        };
+
+        const toggleLiveVideoFitMode = () => {
+            liveVideoObjectFitMode = liveVideoObjectFitMode === 'cover' ? 'contain' : 'cover';
+            applyLiveVideoFitMode();
+            drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
+        };
+
+        const updateFullscreenButtonLabel = () => {
+            if (!liveFullscreenBtn) return;
+            const isFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+            liveFullscreenBtn.textContent = isFullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình';
+        };
+
+        const toggleLiveFullscreen = async () => {
+            const activeFullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+            if (activeFullscreenElement) {
+                try {
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    }
+                } catch (error) {
+                    appendLiveAlert('Không thể thoát toàn màn hình.', 'warn');
+                }
+                return;
+            }
+
+            const targetElement = liveVideoFrame || liveVideo;
+            if (!targetElement) {
+                return;
+            }
+
+            try {
+                if (targetElement.requestFullscreen) {
+                    await targetElement.requestFullscreen();
+                } else if (targetElement.webkitRequestFullscreen) {
+                    targetElement.webkitRequestFullscreen();
+                } else if (liveVideo && typeof liveVideo.webkitEnterFullscreen === 'function') {
+                    liveVideo.webkitEnterFullscreen();
+                } else {
+                    appendLiveAlert('Trình duyệt chưa hỗ trợ toàn màn hình.', 'warn');
+                }
+            } catch (error) {
+                appendLiveAlert('Không thể chuyển sang toàn màn hình.', 'warn');
+            }
+        };
+
+        const setLiveButtonsState = (isRunning) => {
+            if (startLiveMonitorBtn) {
+                startLiveMonitorBtn.disabled = isRunning;
+                startLiveMonitorBtn.classList.toggle('opacity-60', isRunning);
+                startLiveMonitorBtn.classList.toggle('cursor-not-allowed', isRunning);
+            }
+            if (stopLiveMonitorBtn) {
+                stopLiveMonitorBtn.disabled = !isRunning;
+                stopLiveMonitorBtn.classList.toggle('opacity-60', !isRunning);
+                stopLiveMonitorBtn.classList.toggle('cursor-not-allowed', !isRunning);
+            }
+            if (liveIntervalSelect) {
+                liveIntervalSelect.disabled = isRunning;
+            }
+        };
+
+        const getSelectedLiveIntervalMs = () => {
+            const intervalMs = Number.parseInt((liveIntervalSelect && liveIntervalSelect.value) || '1500', 10);
+            if (!Number.isFinite(intervalMs)) {
+                return 1500;
+            }
+
+            return Math.max(LIVE_DYNAMIC_MIN_INTERVAL_MS, Math.min(intervalMs, LIVE_DYNAMIC_MAX_INTERVAL_MS));
+        };
+
+        const scheduleNextLiveCycle = (requestedDelayMs) => {
+            if (!liveIsRunning) {
+                return;
+            }
+
+            const baseDelay = getSelectedLiveIntervalMs();
+            const rawDelay = Number.isFinite(requestedDelayMs) ? Math.max(baseDelay, requestedDelayMs) : baseDelay;
+            const safeDelay = Math.max(LIVE_DYNAMIC_MIN_INTERVAL_MS, Math.min(rawDelay, LIVE_DYNAMIC_MAX_INTERVAL_MS));
+
+            if (liveMonitoringTimer) {
+                clearTimeout(liveMonitoringTimer);
+            }
+
+            liveMonitoringTimer = setTimeout(() => {
+                runLiveTrackingCycle();
+            }, safeDelay);
+        };
+
+        const appendLiveAlert = (message, type = 'info') => {
+            if (!liveAlertList) return;
+
+            const toneClass = type === 'error'
+                ? 'border-red-300/50 bg-red-500/20 text-red-100'
+                : (type === 'warn' ? 'border-amber-300/50 bg-amber-500/20 text-amber-100' : 'border-rose-300/40 bg-slate-900/70 text-rose-100');
+
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+
+            const item = document.createElement('li');
+            item.className = `live-alert-fresh rounded-lg border px-2 py-1.5 ${toneClass}`;
+            item.textContent = `[${hh}:${mm}:${ss}] ${message}`;
+            liveAlertList.prepend(item);
+
+            while (liveAlertList.children.length > 14) {
+                liveAlertList.removeChild(liveAlertList.lastChild);
+            }
+        };
+
+        const tryPlayLiveBeep = () => {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return;
+                if (!liveAudioCtx) {
+                    liveAudioCtx = new AudioCtx();
+                }
+                const osc = liveAudioCtx.createOscillator();
+                const gain = liveAudioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(920, liveAudioCtx.currentTime);
+                gain.gain.setValueAtTime(0.0001, liveAudioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.12, liveAudioCtx.currentTime + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.0001, liveAudioCtx.currentTime + 0.16);
+                osc.connect(gain);
+                gain.connect(liveAudioCtx.destination);
+                osc.start();
+                osc.stop(liveAudioCtx.currentTime + 0.16);
+            } catch (error) {
+                // Không chặn luồng realtime nếu thiết bị không phát âm báo.
+            }
+        };
+
+        const resizeLiveOverlayCanvas = () => {
+            if (!liveOverlayCanvas || !liveVideo) return;
+            const rect = liveVideo.getBoundingClientRect();
+            const targetWidth = Math.max(1, Math.floor(rect.width));
+            const targetHeight = Math.max(1, Math.floor(rect.height));
+            if (liveOverlayCanvas.width !== targetWidth || liveOverlayCanvas.height !== targetHeight) {
+                liveOverlayCanvas.width = targetWidth;
+                liveOverlayCanvas.height = targetHeight;
+            }
+        };
+
+        const drawLiveOverlay = (frameSize, detections, heatmapData) => {
+            if (!liveOverlayCanvas) return;
+            resizeLiveOverlayCanvas();
+
+            const ctx = liveOverlayCanvas.getContext('2d');
+            if (!ctx) return;
+
+            ctx.clearRect(0, 0, liveOverlayCanvas.width, liveOverlayCanvas.height);
+
+            if (!Array.isArray(detections) || detections.length === 0) {
+                return;
+            }
+
+            const frameWidth = frameSize && Number(frameSize.width) > 0 ? Number(frameSize.width) : 1;
+            const frameHeight = frameSize && Number(frameSize.height) > 0 ? Number(frameSize.height) : 1;
+            const canvasWidth = liveOverlayCanvas.width;
+            const canvasHeight = liveOverlayCanvas.height;
+            const useContain = liveVideoObjectFitMode === 'contain';
+            const scale = useContain
+                ? Math.min(canvasWidth / frameWidth, canvasHeight / frameHeight)
+                : Math.max(canvasWidth / frameWidth, canvasHeight / frameHeight);
+            const renderWidth = frameWidth * scale;
+            const renderHeight = frameHeight * scale;
+            const offsetX = (canvasWidth - renderWidth) / 2;
+            const offsetY = (canvasHeight - renderHeight) / 2;
+
+            // VẼ HEAT MAP (trước bbox)
+            if (heatmapData && Array.isArray(heatmapData) && heatmapData.length > 0) {
+                heatmapData.forEach((point) => {
+                    const hx = offsetX + Number(point.x) * scale;
+                    const hy = offsetY + Number(point.y) * scale;
+                    const intensity = Number(point.intensity || 50) / 100; // 0-1
+                    const radius = 15 + intensity * 10; // 15-25 pixels
+                    
+                    // Tao gradient tua theo intensity (xanh -> do)
+                    const gradient = ctx.createRadialGradient(hx, hy, 0, hx, hy, radius);
+                    if (intensity > 0.7) {
+                        gradient.addColorStop(0, 'rgba(239, 68, 68, 0.4)');  // Red
+                        gradient.addColorStop(1, 'rgba(239, 68, 68, 0)');
+                    } else if (intensity > 0.4) {
+                        gradient.addColorStop(0, 'rgba(245, 158, 11, 0.3)');  // Orange
+                        gradient.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                    } else {
+                        gradient.addColorStop(0, 'rgba(34, 197, 94, 0.2)');   // Green
+                        gradient.addColorStop(1, 'rgba(34, 197, 94, 0)');
+                    }
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(hx, hy, radius, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+            }
+
+            detections.forEach((det) => {
+                const bbox = Array.isArray(det.bbox) ? det.bbox : [];
+                if (bbox.length !== 4) return;
+
+                const x = offsetX + Number(bbox[0]) * scale;
+                const y = offsetY + Number(bbox[1]) * scale;
+                const w = (Number(bbox[2]) - Number(bbox[0])) * scale;
+                const h = (Number(bbox[3]) - Number(bbox[1])) * scale;
+
+                if (x + w < 0 || y + h < 0 || x > canvasWidth || y > canvasHeight) {
+                    return;
+                }
+
+                const moveLevel = String(det.movement_level || 'Đứng yên');
+                const strokeColor = moveLevel === 'Di chuyển mạnh'
+                    ? '#ef4444'
+                    : (moveLevel === 'Di chuyển vừa' ? '#f59e0b' : '#10b981');
+
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, w, h);
+                
+                // VẼ MŨI TEN HUONG DI CHUYEN (NEW)
+                if (det.movement_vector && (det.movement_vector.dx !== 0 || det.movement_vector.dy !== 0)) {
+                    const centerX = x + w / 2;
+                    const centerY = y + h / 2;
+                    const vectorDx = det.movement_vector.dx * scale;
+                    const vectorDy = det.movement_vector.dy * scale;
+                    
+                    // Ve duong mui ten
+                    ctx.strokeStyle = strokeColor;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(centerX + vectorDx, centerY + vectorDy);
+                    ctx.stroke();
+                    
+                    // Ve dau mui ten (tam giac)
+                    const arrowSize = 8;
+                    const angle = Math.atan2(vectorDy, vectorDx);
+                    ctx.fillStyle = strokeColor;
+                    ctx.beginPath();
+                    ctx.moveTo(centerX + vectorDx, centerY + vectorDy);
+                    ctx.lineTo(centerX + vectorDx - arrowSize * Math.cos(angle - Math.PI / 6), centerY + vectorDy - arrowSize * Math.sin(angle - Math.PI / 6));
+                    ctx.lineTo(centerX + vectorDx - arrowSize * Math.cos(angle + Math.PI / 6), centerY + vectorDy - arrowSize * Math.sin(angle + Math.PI / 6));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+
+                const species = escapeHtml(det.class_name_vi || toDisplayPestName(det.class_name));
+                const caption = `${species} #${det.track_id || '?'}`;
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
+                const boxWidth = Math.min(Math.max(0, canvasWidth - x - 4), Math.max(120, caption.length * 6.2));
+                ctx.fillRect(x + 2, Math.max(2, y - 20), boxWidth, 18);
+                ctx.fillStyle = '#f8fafc';
+                ctx.font = '11px Be Vietnam Pro, sans-serif';
+                ctx.fillText(caption, x + 6, Math.max(14, y - 7));
+            });
+        };
+
+        const resetLivePanels = () => {
+            liveLastFrameSize = null;
+            liveLastDetections = [];
+
+            if (liveImpactLevel) liveImpactLevel.textContent = 'Nhẹ';
+            if (liveImpactScore) liveImpactScore.textContent = '0/100';
+            if (liveRiskLevel) liveRiskLevel.textContent = 'Thấp';
+            if (liveAvgSpeed) liveAvgSpeed.textContent = '0 px/s';
+            if (liveVisibleCount) liveVisibleCount.textContent = '0 cá thể';
+            if (liveDominantDirection) liveDominantDirection.textContent = 'Không rõ';
+            if (liveSpreadLevel) liveSpreadLevel.textContent = 'Ổn định';
+            if (liveSummaryNote) liveSummaryNote.textContent = 'Chưa có dữ liệu theo dõi, hãy bấm Bắt đầu giám sát.';
+
+            if (liveSpeciesStats) {
+                liveSpeciesStats.innerHTML = '<span class="rounded-full bg-slate-700 px-2 py-1 font-semibold text-slate-200">Chưa ghi nhận</span>';
+            }
+            if (liveTrackTableBody) {
+                liveTrackTableBody.innerHTML = '<tr><td colspan="3" class="px-2 py-3 text-center text-slate-400">Chưa có dữ liệu</td></tr>';
+            }
+            if (liveSpreadEventList) {
+                liveSpreadEventList.innerHTML = '<li class="rounded-lg bg-slate-800 px-2 py-1.5">Chưa ghi nhận đổi hướng di chuyển.</li>';
+            }
+            if (liveAlertList) {
+                liveAlertList.innerHTML = '<li class="rounded-lg border border-rose-200/40 bg-slate-900/70 px-2 py-1.5">Sẵn sàng nhận cảnh báo mới.</li>';
+            }
+
+            updateLiveStatusPill('Sẵn sàng khởi động giám sát', 'idle');
+            drawLiveOverlay(null, [], []);
+        };
+
+        const captureLiveFrameData = () => {
+            if (!liveVideo || !liveVideo.videoWidth || !liveVideo.videoHeight) {
+                return '';
+            }
+
+            const sourceWidth = liveVideo.videoWidth;
+            const sourceHeight = liveVideo.videoHeight;
+            const targetWidth = Math.min(LIVE_MAX_FRAME_WIDTH, sourceWidth);
+            const targetHeight = Math.round((targetWidth / sourceWidth) * sourceHeight);
+
+            liveCaptureCanvas.width = targetWidth;
+            liveCaptureCanvas.height = targetHeight;
+            const ctx = liveCaptureCanvas.getContext('2d');
+            if (!ctx) return '';
+
+            ctx.drawImage(liveVideo, 0, 0, targetWidth, targetHeight);
+            return liveCaptureCanvas.toDataURL('image/jpeg', LIVE_JPEG_QUALITY);
+        };
+
+        const renderLiveSpecies = (speciesCounts) => {
+            if (!liveSpeciesStats) return;
+            const entries = Object.entries(speciesCounts || {});
+            if (entries.length === 0) {
+                liveSpeciesStats.innerHTML = '<span class="rounded-full bg-slate-700 px-2 py-1 font-semibold text-slate-200">Chưa ghi nhận</span>';
+                return;
+            }
+
+            liveSpeciesStats.innerHTML = entries.map(([name, qty]) => {
+                const label = escapeHtml(toDisplayPestName(name));
+                const count = Number(qty) || 0;
+                return `<span class="rounded-full border border-emerald-300/40 bg-emerald-500/20 px-2 py-1 font-semibold text-emerald-100">${label}: ${count}</span>`;
+            }).join('');
+        };
+
+        const renderLiveTracks = (tracks) => {
+            if (!liveTrackTableBody) return;
+            if (!Array.isArray(tracks) || tracks.length === 0) {
+                liveTrackTableBody.innerHTML = '<tr><td colspan="3" class="px-2 py-3 text-center text-slate-400">Chưa có dữ liệu</td></tr>';
+                return;
+            }
+
+            liveTrackTableBody.innerHTML = tracks.slice(0, 12).map((item) => {
+                const species = escapeHtml(item.class_name_vi || toDisplayPestName(item.class_name));
+                const direction = escapeHtml(item.direction || 'Đứng yên');
+                const speed = Number(item.speed_px_s || 0).toFixed(1);
+                const speedTone = Number(item.speed_px_s || 0) >= 45 ? 'text-red-300' : (Number(item.speed_px_s || 0) >= 15 ? 'text-amber-300' : 'text-emerald-300');
+                return `<tr>
+                    <td class="px-2 py-1.5 font-semibold text-slate-100">${species} #${Number(item.track_id) || '?'}</td>
+                    <td class="px-2 py-1.5 text-slate-300">${direction}</td>
+                    <td class="px-2 py-1.5 text-right font-bold ${speedTone}">${speed}</td>
+                </tr>`;
+            }).join('');
+        };
+
+        const renderSpreadEvents = (events) => {
+            if (!liveSpreadEventList) return;
+            if (!Array.isArray(events) || events.length === 0) {
+                liveSpreadEventList.innerHTML = '<li class="rounded-lg bg-slate-800 px-2 py-1.5">Chưa ghi nhận đổi hướng di chuyển.</li>';
+                return;
+            }
+
+            liveSpreadEventList.innerHTML = events.slice(0, 8).map((event) => {
+                const species = escapeHtml(event.class_name_vi || toDisplayPestName(event.class_name));
+                const fromDirection = escapeHtml(event.from_direction || 'Đứng yên');
+                const toDirection = escapeHtml(event.to_direction || 'Đứng yên');
+                const duration = Number(event.duration_seconds || 0).toFixed(1);
+                return `<li class="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5">
+                    ${species} #${Number(event.track_id) || '?'}: ${fromDirection} → ${toDirection} sau ${duration}s
+                </li>`;
+            }).join('');
+        };
+
+        const renderLiveSummary = (summary) => {
+            const score = Number(summary.impact_score || 0);
+            const avgSpeed = Number(summary.avg_speed_px_s || 0);
+            const totalVisible = Number(summary.total_visible || 0);
+            const dominantDirection = String(summary.dominant_direction || 'Không rõ');
+            const spreadLevel = String(summary.spread_level || 'Ổn định');
+
+            if (liveImpactLevel) {
+                liveImpactLevel.textContent = summary.impact_level || 'Nhẹ';
+                liveImpactLevel.className = `font-bold ${score >= 70 ? 'text-red-300' : (score >= 35 ? 'text-amber-300' : 'text-emerald-300')}`;
+            }
+            if (liveImpactScore) {
+                liveImpactScore.textContent = `${score}/100`;
+            }
+            if (liveRiskLevel) {
+                liveRiskLevel.textContent = summary.risk_level || 'Thấp';
+                liveRiskLevel.className = `font-bold ${score >= 70 ? 'text-red-300' : (score >= 35 ? 'text-amber-300' : 'text-slate-100')}`;
+            }
+            if (liveAvgSpeed) {
+                liveAvgSpeed.textContent = `${avgSpeed.toFixed(1)} px/s`;
+            }
+            if (liveVisibleCount) {
+                liveVisibleCount.textContent = `${totalVisible} cá thể`;
+            }
+            if (liveDominantDirection) {
+                liveDominantDirection.textContent = dominantDirection;
+            }
+            if (liveSpreadLevel) {
+                liveSpreadLevel.textContent = spreadLevel;
+                liveSpreadLevel.className = `font-bold ${spreadLevel === 'Lây lan nhanh' ? 'text-red-300' : (spreadLevel === 'Đang lan rộng' ? 'text-amber-300' : 'text-slate-100')}`;
+            }
+            if (liveSummaryNote) {
+                liveSummaryNote.textContent = summary.summary_note || 'Đang chờ thêm dữ liệu để đánh giá chuyển động.';
+            }
+        };
+
+        const renderLiveResponse = (data) => {
+            const summary = data.movement_summary || {};
+            renderLiveSummary(summary);
+            renderLiveSpecies(data.species_counts || {});
+            renderLiveTracks(data.tracks || []);
+            renderSpreadEvents(data.spread_events || []);
+            liveLastFrameSize = data.frame_size || null;
+            liveLastDetections = Array.isArray(data.detections) ? data.detections : [];
+            liveLastHeatmap = Array.isArray(data.centroid_heatmap) ? data.centroid_heatmap : [];
+            liveMovementSummary = summary;
+            
+            // Luu vao history
+            liveSessionHistory.push({
+                timestamp: Date.now(),
+                alert_level: summary.alert_level || 'green',
+                total_visible: summary.total_visible || 0,
+                impact_score: summary.impact_score || 0,
+            });
+            
+            drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
+
+            const notifications = Array.isArray(data.notifications) ? data.notifications : [];
+            notifications.forEach((text) => {
+                appendLiveAlert(text, 'warn');
+            });
+            if (notifications.length > 0) {
+                tryPlayLiveBeep();
+                updateLiveStatusPill(`Nhận ${notifications.length} cảnh báo mới`, 'running');
+            } else {
+                updateLiveStatusPill('Đang giám sát realtime...', 'running');
+            }
+        };
+
+        const runLiveTrackingCycle = async () => {
+            if (!liveIsRunning || liveRequestInFlight) {
+                return;
+            }
+
+            const frameData = captureLiveFrameData();
+            if (!frameData) {
+                updateLiveStatusPill('Camera chưa sẵn sàng để phân tích', 'idle');
+                scheduleNextLiveCycle(getSelectedLiveIntervalMs());
+                return;
+            }
+
+            liveRequestInFlight = true;
+            liveRequestController = new AbortController();
+            const startedAtMs = performance.now();
+            let requestTimeoutHandle = null;
+            let nextDelayMs = getSelectedLiveIntervalMs();
+            try {
+                const payload = {
+                    frame_data: frameData,
+                    session_id: liveSessionId,
+                    timestamp_ms: Date.now()
+                };
+
+                requestTimeoutHandle = setTimeout(() => {
+                    if (liveRequestController) {
+                        liveRequestController.abort();
+                    }
+                }, LIVE_REQUEST_TIMEOUT_MS);
+
+                const response = await fetch(liveApiEndpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: liveRequestController.signal
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Không thể phân tích dữ liệu realtime.');
+                }
+
+                if (data.session_id) {
+                    liveSessionId = String(data.session_id);
+                }
+
+                liveConsecutiveTimeouts = 0;
+                const responseMs = Math.max(1, performance.now() - startedAtMs);
+                nextDelayMs = Math.min(
+                    LIVE_DYNAMIC_MAX_INTERVAL_MS,
+                    Math.max(getSelectedLiveIntervalMs(), Math.round(responseMs + 220))
+                );
+                renderLiveResponse(data);
+            } catch (error) {
+                const isTimeout = error && error.name === 'AbortError';
+                if (isTimeout) {
+                    liveConsecutiveTimeouts += 1;
+                    nextDelayMs = Math.min(
+                        LIVE_DYNAMIC_MAX_INTERVAL_MS,
+                        getSelectedLiveIntervalMs() + (liveConsecutiveTimeouts * LIVE_ERROR_BACKOFF_MS)
+                    );
+                } else {
+                    liveConsecutiveTimeouts = Math.min(liveConsecutiveTimeouts + 1, 3);
+                    nextDelayMs = Math.min(
+                        LIVE_DYNAMIC_MAX_INTERVAL_MS,
+                        getSelectedLiveIntervalMs() + LIVE_ERROR_BACKOFF_MS
+                    );
+                }
+
+                const message = isTimeout
+                    ? 'AI phản hồi chậm, hệ thống sẽ thử lại ở khung tiếp theo.'
+                    : (error && error.message ? error.message : 'Lỗi không xác định trong chế độ realtime.');
+                updateLiveStatusPill(message, 'error');
+                appendLiveAlert(message, 'error');
+            } finally {
+                if (requestTimeoutHandle) {
+                    clearTimeout(requestTimeoutHandle);
+                }
+                liveRequestController = null;
+                liveRequestInFlight = false;
+                liveNextDelayMs = nextDelayMs;
+                scheduleNextLiveCycle(liveNextDelayMs);
+            }
+        };
+
+        const stopLiveMonitoring = () => {
+            liveIsRunning = false;
+            if (liveMonitoringTimer) {
+                clearTimeout(liveMonitoringTimer);
+                liveMonitoringTimer = null;
+            }
+            if (liveRequestController) {
+                liveRequestController.abort();
+                liveRequestController = null;
+            }
+            liveRequestInFlight = false;
+            liveConsecutiveTimeouts = 0;
+            setLiveButtonsState(false);
+            updateLiveStatusPill('Đã dừng giám sát trực tiếp', 'idle');
+        };
+
+        const startLiveMonitoring = async () => {
+            if (liveIsRunning) {
+                return;
+            }
+
+            if (!liveMonitorStream) {
+                const started = await startLiveCamera(liveFacingMode);
+                if (!started) {
+                    alert('Không thể mở camera để giám sát realtime.');
+                    return;
+                }
+            }
+
+            liveSessionId = `live_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            liveIsRunning = true;
+            liveConsecutiveTimeouts = 0;
+            liveNextDelayMs = getSelectedLiveIntervalMs();
+            setLiveButtonsState(true);
+            updateLiveStatusPill('Đang giám sát realtime...', 'running');
+            appendLiveAlert('Bắt đầu giám sát trực tiếp.', 'info');
+
+            runLiveTrackingCycle();
+        };
+
+        const exportLiveReportAsCSV = () => {
+            const timestamp = new Date().toLocaleString('vi-VN');
+            const header = 'Thời gian,Cấp độ cảnh báo,Số lượng cảm nhận,Điểm ảnh hưởng,Loài chủ yếu\n';
+            let csvContent = header;
+            
+            // Group history by alert level and extract relevant data
+            liveSessionHistory.forEach(entry => {
+                const alertLevel = entry.alert_level || 'unknown';
+                const visible = entry.total_visible || 0;
+                const score = Math.round(entry.impact_score || 0);
+                const timestamp = new Date(entry.timestamp).toLocaleTimeString('vi-VN');
+                
+                csvContent += `"${timestamp}","${alertLevel}",${visible},${score},""\n`;
+            });
+            
+            // Add footer summary
+            if (liveMovementSummary) {
+                csvContent += `\n"Tóm tắt phiên làm việc",,,,\n`;
+                csvContent += `"Điểm ảnh hưởng tối đa",${Math.round(liveMovementSummary.max_impact_score || 0)},,,""\n`;
+                csvContent += `"Số bản ghi",${liveSessionHistory.length},,,""\n`;
+            }
+            
+            // Create blob and download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute('href', url);
+            link.setAttribute('download', `live_report_${Date.now()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        const showLiveHistoryPanel = () => {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+            
+            let historyHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-2xl w-full mx-4 max-h-96 overflow-y-auto">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-bold">Lịch sử giám sát</h2>
+                        <button class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+                    </div>
+                    <table class="w-full text-sm border-collapse">
+                        <thead>
+                            <tr class="border-b">
+                                <th class="text-left p-2 font-semibold">Thời gian</th>
+                                <th class="text-center p-2 font-semibold">Cấp độ cảnh báo</th>
+                                <th class="text-right p-2 font-semibold">Số lượng</th>
+                                <th class="text-right p-2 font-semibold">Điểm ảnh hưởng</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            // Generate history rows
+            liveSessionHistory.forEach((entry, idx) => {
+                const time = new Date(entry.timestamp).toLocaleTimeString('vi-VN');
+                const alert = entry.alert_level || 'unknown';
+                const levelColor = {
+                    'green': 'bg-green-100 text-green-900',
+                    'yellow': 'bg-yellow-100 text-yellow-900',
+                    'orange': 'bg-orange-100 text-orange-900',
+                    'red': 'bg-red-100 text-red-900'
+                }[alert] || 'bg-gray-100 text-gray-900';
+                
+                historyHTML += `
+                    <tr class="${idx % 2 === 0 ? 'bg-gray-50' : ''}">
+                        <td class="p-2 border-b">${time}</td>
+                        <td class="p-2 border-b text-center"><span class="px-3 py-1 rounded ${levelColor}">${alert}</span></td>
+                        <td class="p-2 border-b text-right">${entry.total_visible}</td>
+                        <td class="p-2 border-b text-right">${Math.round(entry.impact_score)}</td>
+                    </tr>
+                `;
+            });
+            
+            historyHTML += `
+                        </tbody>
+                    </table>
+                    <div class="mt-4 text-sm text-gray-600">
+                        <p>Tổng số bản ghi: <strong>${liveSessionHistory.length}</strong></p>
+                        ${liveMovementSummary ? `<p>Điểm ảnh hưởng tối đa: <strong>${Math.round(liveMovementSummary.max_impact_score || 0)}</strong></p>` : ''}
+                    </div>
+                </div>
+            `;
+            
+            modal.innerHTML = historyHTML;
+            document.body.appendChild(modal);
+            
+            // Close button handler
+            const closeBtn = modal.querySelector('button');
+            closeBtn.addEventListener('click', () => {
+                document.body.removeChild(modal);
+            });
+            
+            // Close on backdrop click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    document.body.removeChild(modal);
+                }
+            });
+        };
+
+        const openLiveMonitor = async () => {
+            closeCamera();
+            resetLivePanels();
+
+            const started = await startLiveCamera(liveFacingMode);
+            if (!started) {
+                alert('Không mở được camera. Hãy cấp quyền camera và truy cập bằng HTTPS.');
+                return;
+            }
+            liveMonitorModal.classList.remove('hidden');
+            applyLiveVideoFitMode();
+            updateFullscreenButtonLabel();
+            resizeLiveOverlayCanvas();
+            drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
+        };
+
+        const closeLiveMonitor = () => {
+            stopLiveMonitoring();
+
+            const fullscreenTarget = document.fullscreenElement || document.webkitFullscreenElement;
+            if (fullscreenTarget && (fullscreenTarget === liveVideoFrame || fullscreenTarget === liveVideo)) {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen().catch(() => {});
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
+            }
+
+            liveMonitorModal.classList.add('hidden');
+            stopLiveCamera();
+            if (liveOverlayCanvas) {
+                const ctx = liveOverlayCanvas.getContext('2d');
+                if (ctx) {
+                    ctx.clearRect(0, 0, liveOverlayCanvas.width, liveOverlayCanvas.height);
+                }
             }
         };
 
         const openCamera = async () => {
+            closeLiveMonitor();
             const started = await startCamera(currentFacingMode);
             if (!started) {
                 alert('Không mở được camera. Hãy cấp quyền camera và truy cập bằng HTTPS.');
@@ -1109,12 +2132,15 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             stopCamera();
         };
 
-        imageInput.addEventListener('change', () => {
-            const hasFile = imageInput.files && imageInput.files[0];
-            setPreview(hasFile ? imageInput.files[0] : null);
-        });
+        if (imageInput) {
+            imageInput.addEventListener('change', () => {
+                const hasFile = imageInput.files && imageInput.files[0];
+                setPreview(hasFile ? imageInput.files[0] : null);
+            });
+        }
 
         ['dragenter', 'dragover'].forEach((eventName) => {
+            if (!dropzone) return;
             dropzone.addEventListener(eventName, (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1123,6 +2149,7 @@ $monitoredRegionDisplay = $monitoredRegionCount;
         });
 
         ['dragleave', 'drop'].forEach((eventName) => {
+            if (!dropzone) return;
             dropzone.addEventListener(eventName, (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1130,73 +2157,154 @@ $monitoredRegionDisplay = $monitoredRegionCount;
             });
         });
 
-        dropzone.addEventListener('drop', (event) => {
-            const files = event.dataTransfer.files;
-            if (!files || !files.length) return;
-            imageInput.files = files;
-            setPreview(files[0]);
-        });
+        if (dropzone) {
+            dropzone.addEventListener('drop', (event) => {
+                const files = event.dataTransfer.files;
+                if (!files || !files.length || !imageInput) return;
+                imageInput.files = files;
+                setPreview(files[0]);
+            });
+        }
 
-        openCameraBtn.addEventListener('click', openCamera);
-        closeCameraBtn.addEventListener('click', closeCamera);
+        if (openCameraBtn) {
+            openCameraBtn.addEventListener('click', openCamera);
+        }
+        if (closeCameraBtn) {
+            closeCameraBtn.addEventListener('click', closeCamera);
+        }
 
-        captureBtn.addEventListener('click', () => {
-            if (!cameraStream) return;
-            const size = getCameraFrameSize();
-            const width = size.width;
-            const height = size.height;
-            if (!width || !height) {
-                alert('Camera đang khởi tạo, vui lòng chờ 1-2 giây rồi chụp lại.');
-                return;
-            }
-            cameraCanvas.width = width;
-            cameraCanvas.height = height;
-            const ctx = cameraCanvas.getContext('2d');
-            ctx.drawImage(cameraVideo, 0, 0, width, height);
-            capturedDataUrl = cameraCanvas.toDataURL('image/jpeg', 0.92);
-            cameraVideo.classList.add('hidden');
-            cameraCanvas.classList.remove('hidden');
-        });
+        if (captureBtn) {
+            captureBtn.addEventListener('click', () => {
+                if (!cameraStream) return;
+                const size = getCameraFrameSize();
+                const width = size.width;
+                const height = size.height;
+                if (!width || !height) {
+                    alert('Camera đang khởi tạo, vui lòng chờ 1-2 giây rồi chụp lại.');
+                    return;
+                }
+                cameraCanvas.width = width;
+                cameraCanvas.height = height;
+                const ctx = cameraCanvas.getContext('2d');
+                ctx.drawImage(cameraVideo, 0, 0, width, height);
+                capturedDataUrl = cameraCanvas.toDataURL('image/jpeg', CAPTURE_JPEG_QUALITY);
+                cameraVideo.classList.add('hidden');
+                cameraCanvas.classList.remove('hidden');
+            });
+        }
 
-        retakeBtn.addEventListener('click', () => {
-            capturedDataUrl = '';
-            cameraCanvas.classList.add('hidden');
-            cameraVideo.classList.remove('hidden');
-        });
+        if (retakeBtn) {
+            retakeBtn.addEventListener('click', () => {
+                capturedDataUrl = '';
+                cameraCanvas.classList.add('hidden');
+                cameraVideo.classList.remove('hidden');
+            });
+        }
 
-        switchCameraBtn.addEventListener('click', async () => {
-            if (isSwitchingCamera) return;
-            isSwitchingCamera = true;
-            const nextFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
-            const started = await startCamera(nextFacingMode);
-            if (!started) alert('Thiết bị không hỗ trợ đổi camera hoặc camera còn lại không khả dụng.');
-            isSwitchingCamera = false;
-        });
+        if (switchCameraBtn) {
+            switchCameraBtn.addEventListener('click', async () => {
+                if (isSwitchingCamera) return;
+                isSwitchingCamera = true;
+                const nextFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+                const started = await startCamera(nextFacingMode);
+                if (!started) {
+                    alert('Thiết bị không hỗ trợ đổi camera hoặc camera còn lại không khả dụng.');
+                }
+                isSwitchingCamera = false;
+            });
+        }
 
-        usePhotoBtn.addEventListener('click', () => {
-            if (!capturedDataUrl) {
-                alert('Bạn chưa chụp ảnh.'); return;
-            }
-            capturedImageInput.value = capturedDataUrl;
-            imageInput.value = '';
-            setPreviewDataUrl(capturedDataUrl, 'Ảnh chụp từ camera');
-            closeCamera();
+        if (usePhotoBtn) {
+            usePhotoBtn.addEventListener('click', () => {
+                if (!capturedDataUrl) {
+                    alert('Bạn chưa chụp ảnh.');
+                    return;
+                }
+                capturedImageInput.value = capturedDataUrl;
+                if (imageInput) {
+                    imageInput.value = '';
+                }
+                setPreviewDataUrl(capturedDataUrl, 'Ảnh chụp từ camera');
+                closeCamera();
+            });
+        }
+
+        if (openLiveMonitorBtn) {
+            openLiveMonitorBtn.addEventListener('click', openLiveMonitor);
+        }
+        if (closeLiveMonitorBtn) {
+            closeLiveMonitorBtn.addEventListener('click', closeLiveMonitor);
+        }
+        if (startLiveMonitorBtn) {
+            startLiveMonitorBtn.addEventListener('click', startLiveMonitoring);
+        }
+        if (stopLiveMonitorBtn) {
+            stopLiveMonitorBtn.addEventListener('click', stopLiveMonitoring);
+        }
+        if (exportLiveReportBtn) {
+            exportLiveReportBtn.addEventListener('click', () => {
+                if (liveSessionHistory.length === 0) {
+                    alert('Chưa có dữ liệu để xuất báo cáo. Hãy bắt đầu giám sát trước.');
+                    return;
+                }
+                exportLiveReportAsCSV();
+            });
+        }
+        if (viewHistoryBtn) {
+            viewHistoryBtn.addEventListener('click', () => {
+                showLiveHistoryPanel();
+            });
+        }
+        if (switchLiveCameraBtn) {
+            switchLiveCameraBtn.addEventListener('click', async () => {
+                if (liveSwitchingCamera) return;
+                liveSwitchingCamera = true;
+                const nextFacingMode = liveFacingMode === 'environment' ? 'user' : 'environment';
+                const started = await startLiveCamera(nextFacingMode);
+                if (!started) {
+                    alert('Không thể đổi camera ở chế độ live.');
+                }
+                liveSwitchingCamera = false;
+            });
+        }
+        if (toggleLiveFitBtn) {
+            toggleLiveFitBtn.addEventListener('click', toggleLiveVideoFitMode);
+        }
+        if (liveFullscreenBtn) {
+            liveFullscreenBtn.addEventListener('click', toggleLiveFullscreen);
+        }
+        if (openCameraFromLiveBtn) {
+            openCameraFromLiveBtn.addEventListener('click', async () => {
+                closeLiveMonitor();
+                await openCamera();
+            });
+        }
+        document.addEventListener('fullscreenchange', updateFullscreenButtonLabel);
+        document.addEventListener('webkitfullscreenchange', updateFullscreenButtonLabel);
+
+        window.addEventListener('resize', () => {
+            resizeLiveOverlayCanvas();
+            drawLiveOverlay(liveLastFrameSize, liveLastDetections, liveLastHeatmap);
         });
 
         window.addEventListener('beforeunload', () => {
             stopCamera();
+            stopLiveMonitoring();
+            stopLiveCamera();
             if (previewObjectUrl) {
                 URL.revokeObjectURL(previewObjectUrl);
                 previewObjectUrl = null;
             }
         });
 
-        scanForm.addEventListener('submit', () => {
-            scanOverlay.classList.remove('hidden');
-            scanOverlay.classList.add('flex');
-            btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
-            btnAnalyze.classList.add('opacity-70', 'cursor-not-allowed');
-        });
+        if (scanForm) {
+            scanForm.addEventListener('submit', () => {
+                scanOverlay.classList.remove('hidden');
+                scanOverlay.classList.add('flex');
+                btnAnalyze.innerHTML = '<iconify-icon icon="solar:spinner-linear" width="20" class="animate-spin"></iconify-icon> Đang phân tích...';
+                btnAnalyze.classList.add('opacity-70', 'cursor-not-allowed');
+            });
+        }
     </script>
 
    <script>
