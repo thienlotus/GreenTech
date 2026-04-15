@@ -21,8 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $response = false;
     $http_code = 0;
     $curl_error = '';
-    $maxAttempts = get_ai_retry_attempts();
-    $timeout = get_ai_timeout_seconds();
+    $maxAttempts = get_ai_detect_retry_attempts();
+    $timeout = get_ai_detect_timeout_seconds();
+    $connectTimeout = get_ai_detect_connect_timeout_seconds();
     $relaxSslVerify = should_relax_ai_ssl_verify();
 
     for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -31,10 +32,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $connectTimeout);
         curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json', 'Expect:']);
         curl_setopt($ch, CURLOPT_USERAGENT, 'GreenTech-Process/1.0');
 
@@ -55,7 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $retryableHttp = in_array($http_code, [408, 425, 429, 500, 502, 503, 504, 522, 524], true);
         $retryableNetwork = $response === false;
         if (($retryableHttp || $retryableNetwork) && $attempt < $maxAttempts) {
-            usleep(600000);
+            $delayMs = min(1800, 600 * $attempt);
+            usleep($delayMs * 1000);
         }
     }
 
